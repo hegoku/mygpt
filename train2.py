@@ -27,7 +27,6 @@ def encode_data(data):
 data_path = 'wikimedia/wikipedia'
 dataset = load_dataset(data_path, "20231101.zh", split='train[0:200]')
 a = MyDataset.MyDataset2(dataset, tokenizer, 512, 512)
-print(tokenizer.decode(a.input_ids[0]))
 
 train_loader = DataLoader(
    a,

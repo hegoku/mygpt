@@ -48,7 +48,7 @@ class MyDataset2(Dataset):
 
         for txt in txt_d:
             i = 0
-            txt['text'] = txt['text'].replace("\n\n", tokenizer.eos_token+tokenizer.bos_token)
+            # txt['text'] = txt['text'].replace("\n\n", tokenizer.eos_token+tokenizer.bos_token)
             token_ids = tokenizer.encode(txt['text'])
             remaining_size = token_ids.shape[0]
             while remaining_size>0:
