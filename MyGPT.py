@@ -18,12 +18,27 @@ class MyGPT(nn.Module):
 
     def forward(self, token_ids):
         embedding = self.token_embedding(token_ids)
-        embedding += self.p_embedding(torch.arange(token_ids.shape[-1], device=token_ids.device))
+        # embedding += self.p_embedding(torch.arange(token_ids.shape[-1], device=token_ids.device))
+        embedding += self.positionEmbedding(token_ids.shape[-1], self.embedding_dim, device=token_ids.device, dtype=embedding.dtype)
         embedding = self.drop_emb(embedding)
         embedding = self.transformer_layers(embedding)
         embedding = self.norm(embedding)
         embedding = self.output(embedding)
         return embedding
+    
+    def positionEmbedding(self, seq_len, d_model, device, dtype, base=10000):
+        res = torch.zeros(seq_len, d_model, device=device, dtype=dtype)
+        exp_1 = torch.arange(d_model // 2, dtype=dtype, device=device)  # 初始化一半维度，sin位置编码的维度被分为了两部分
+        exp_value = exp_1 / (d_model / 2)
+
+        alpha = 1 / (base ** exp_value)  # size(dmodel/2)
+        out = torch.arange(seq_len, dtype=dtype, device=device)[:, None] @ alpha[None, :]  # size(max_sequence_length, d_model/2)
+        embedding_sin = torch.sin(out)
+        embedding_cos = torch.cos(out)
+
+        res[:, 0::2] = embedding_sin  # 奇数位置设置为sin
+        res[:, 1::2] = embedding_cos  # 偶数位置设置为cos
+        return res
 
 class TransformerBlock(nn.Module):
     def __init__(self, max_context:int, embedding_dim:int, d_q:int, d_v:int, head_num:int, dropout=0.0):

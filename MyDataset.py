@@ -48,19 +48,13 @@ class MyDataset2(Dataset):
 
         for txt in txt_d:
             i = 0
+            txt['text'] = txt['text'].replace("\n\n", tokenizer.eos_token+tokenizer.bos_token)
             token_ids = tokenizer.encode(txt['text'])
             remaining_size = token_ids.shape[0]
             while remaining_size>0:
                 if (remaining_size<=max_length):
                     input_chunk = token_ids[i:]
                     target_chunk = token_ids[i + 1: ]
-                # if (i+max_length+1) >= token_ids.shape[0]:
-                #     input_chunk = token_ids[i:i + max_length]
-                #     target_chunk = token_ids[i + 1: i + max_length + 1]
-                    # tmp = torch.full([max_length-input_chunk.shape[0]], tokenizer.eos_token_id)
-                    # input_chunk = torch.cat((input_chunk, tmp))
-                    # tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.eos_token_id)
-                    # target_chunk = torch.cat((target_chunk, tmp))
                     tmp = torch.full([max_length-input_chunk.shape[0]], tokenizer.eos_token_id)
                     input_chunk = torch.cat((input_chunk, tmp))
                     tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.eos_token_id)
@@ -68,14 +62,6 @@ class MyDataset2(Dataset):
                 else:
                     input_chunk = token_ids[i:i + max_length]
                     target_chunk = token_ids[i + 1: i + max_length + 1]
-                # if max_length-input_chunk.shape[0]>0:
-                #     tmp = torch.full([max_length-input_chunk.shape[0]], tokenizer.eos_token_id)
-                #     input_chunk = torch.cat((input_chunk, tmp))
-                # if max_length-target_chunk.shape[0]>0:
-                #     tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.eos_token_id)
-                #     target_chunk = torch.cat((target_chunk, tmp))
-                # self.input_ids.append(tokenizer.decode(input_chunk))
-                # self.target_ids.append(target_chunk.detach().clone())
                 self.input_ids.append(input_chunk.detach().clone())
                 self.target_ids.append(target_chunk.detach().clone())
                 i = i+stride
