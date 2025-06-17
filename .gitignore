@@ -2,3 +2,6 @@ __pycache__/
 
 train_data.txt
 loss-plot.pdf
+val_wiki/
+train_wiki/
+wandb/

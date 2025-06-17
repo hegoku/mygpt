@@ -21,10 +21,10 @@ val_data = text_data[split_idx:]
 
 # tokenizer = Tokenizer.Tokenizer()
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
-model = MyGPT.MyGPT(tokenizer=tokenizer, layer=12 , max_context=1024, embedding_dim=768, d_q=64, d_v=64, dropout=0.1, head_num=12)
+model = MyGPT.MyGPT(tokenizer=tokenizer, layer=12 , max_context=50, embedding_dim=768, d_q=64, d_v=64, dropout=0.1, head_num=12)
 
-train_loader = MyDataset.create_dataloader_v1(train_data, tokenizer, max_length=50, stride=10, drop_last=True, shuffle=True)
-val_loader = MyDataset.create_dataloader_v1(val_data, tokenizer, max_length=50, stride=10, drop_last=False, shuffle=False)
+train_loader = MyDataset.create_dataloader_v1(train_data, tokenizer, max_length=50, stride=50, drop_last=True, shuffle=True)
+val_loader = MyDataset.create_dataloader_v1(val_data, tokenizer, max_length=50, stride=50, drop_last=False, shuffle=False)
 # print("Train loader:")
 # for x, y in train_loader:
 #     print(x.shape, y.shape)

@@ -19,7 +19,7 @@ class MyGPT(nn.Module):
     def forward(self, token_ids):
         embedding = self.token_embedding(token_ids)
         # embedding += self.p_embedding(torch.arange(token_ids.shape[-1], device=token_ids.device))
-        embedding += self.positionEmbedding(token_ids.shape[-1], self.embedding_dim, device=token_ids.device, dtype=embedding.dtype)
+        # embedding += self.positionEmbedding(token_ids.shape[-1], self.embedding_dim, device=token_ids.device, dtype=embedding.dtype)
         embedding = self.drop_emb(embedding)
         embedding = self.transformer_layers(embedding)
         embedding = self.norm(embedding)
