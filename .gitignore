@@ -5,3 +5,4 @@ loss-plot.pdf
 val_wiki/
 train_wiki/
 wandb/
+checkpoint/

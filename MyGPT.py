@@ -14,7 +14,7 @@ class MyGPT(nn.Module):
         self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, d_q, d_v, head_num, dropout) for _ in range(layer)])
         self.norm = nn.LayerNorm(embedding_dim)
         self.output = nn.Linear(embedding_dim, tokenizer.len())
-        self.p_embedding = nn.Embedding(self.max_context, self.embedding_dim)
+        # self.p_embedding = nn.Embedding(self.max_context, self.embedding_dim)
 
     def forward(self, token_ids):
         embedding = self.token_embedding(token_ids)
