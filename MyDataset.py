@@ -1,5 +1,6 @@
 from torch.utils.data import Dataset, DataLoader
 import torch
+import zhconv
 
 class MyDataset(Dataset):
     def __init__(self, txt, tokenizer, max_length, stride):
@@ -49,15 +50,15 @@ class MyDataset2(Dataset):
         for txt in txt_d:
             i = 0
             # txt['text'] = txt['text'].replace("\n\n", tokenizer.eos_token+tokenizer.bos_token)
-            token_ids = tokenizer.encode(txt['text'])
+            token_ids = tokenizer.encode(zhconv.convert(txt['text'],"zh-hans"))
             remaining_size = token_ids.shape[0]
             while remaining_size>0:
                 if (remaining_size<=max_length):
                     input_chunk = token_ids[i:]
                     target_chunk = token_ids[i + 1: ]
-                    tmp = torch.full([max_length-input_chunk.shape[0]], tokenizer.eos_token_id)
+                    tmp = torch.full([max_length-input_chunk.shape[0]], tokenizer.pad_token_id)
                     input_chunk = torch.cat((input_chunk, tmp))
-                    tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.eos_token_id)
+                    tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.pad_token_id)
                     target_chunk = torch.cat((target_chunk, tmp))
                 else:
                     input_chunk = token_ids[i:i + max_length]
