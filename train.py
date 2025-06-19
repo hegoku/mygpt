@@ -22,16 +22,18 @@ val_data = text_data[split_idx:]
 # tokenizer = Tokenizer.Tokenizer()
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 model = MyGPT.MyGPT(tokenizer=tokenizer, layer=12 , max_context=50, embedding_dim=768, d_q=64, d_v=64, dropout=0.1, head_num=12)
+total_params = sum(p.numel() for p in model.parameters())
+print(f"Total number of parameters: {total_params:,}")
 
-train_loader = MyDataset.create_dataloader_v1(train_data, tokenizer, max_length=50, stride=50, drop_last=True, shuffle=True)
-val_loader = MyDataset.create_dataloader_v1(val_data, tokenizer, max_length=50, stride=50, drop_last=False, shuffle=False)
-# print("Train loader:")
-# for x, y in train_loader:
-#     print(x.shape, y.shape)
+train_loader = MyDataset.create_dataloader_v1(train_data, tokenizer, max_length=50, stride=20, drop_last=True, shuffle=True)
+val_loader = MyDataset.create_dataloader_v1(val_data, tokenizer, max_length=50, stride=20, drop_last=False, shuffle=False)
+# # print("Train loader:")
+# # for x, y in train_loader:
+# #     print(x.shape, y.shape)
 
-# print("\nValidation loader:")
-# for x, y in val_loader:
-#     print(x.shape, y.shape)
+# # print("\nValidation loader:")
+# # for x, y in val_loader:
+# #     print(x.shape, y.shape)
     
 if torch.cuda.is_available():
    device = torch.device("cuda")
@@ -43,12 +45,12 @@ else:
 print(f"Using {device} device.")
 
 
-model.to(device)
+model.to(device, dtype=torch.bfloat16)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1)
 num_epochs = 100
 train_losses, val_losses, tokens_seen = Trainer.train_model_simple(
     model, train_loader, val_loader, optimizer, device,
     num_epochs=num_epochs, eval_freq=5, eval_iter=5,
-    start_context="QKV计算", tokenizer=tokenizer
+    start_context="自注意力机制分三步", tokenizer=tokenizer
 )
