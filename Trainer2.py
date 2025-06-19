@@ -3,6 +3,7 @@ import MyGPT
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import wandb
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 def calc_loss_batch(input_batch, target_batch, model, device):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
@@ -36,10 +37,11 @@ def calc_loss_loader(data_loader, model, tokenizer, device, num_batches=None):
     return 0
 
 def train_model_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
-                       eval_freq, eval_iter, start_context, tokenizer, write_log=False):
+                       eval_freq, eval_iter, start_context, tokenizer, write_log=False, save_dir=None, save_freq=1000):
     # Initialize lists to track losses and tokens seen
     train_losses, val_losses, track_tokens_seen = [], [], []
     tokens_seen, global_step = 0, -1
+    scheduler = CosineAnnealingLR(optimizer, T_max=100, eta_min=0.00001)
 
     if write_log:
         run = wandb.init(
@@ -47,7 +49,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
             project="mygpt",
             # Track hyperparameters and run metadata.
             config={
-                "learning_rate": 0.0004,
+                "learning_rate": scheduler.get_last_lr(),
                 "epochs": num_epochs,
             },
         )
@@ -81,24 +83,28 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 # val_losses.append(val_loss)
                 # track_tokens_seen.append(tokens_seen)
                 if write_log:
-                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss})
-                print(f"Ep {epoch+1} (Step {global_step:06d}): "
-                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}")
+                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()})
+                print(f"Ep {epoch+1} (Step {global_step:09d}): "
+                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()}")
+                
+            if save_dir!=None and (global_step % save_freq ==0):
+                torch.save({
+                    "model":model,
+                    "opt":optimizer,
+                    "scheduler":scheduler,
+                    "epoch":epoch,
+                    "trainer":train_loader,
+                    "val":val_loader,
+                    "num_epochs":num_epochs,
+                    "global_step":global_step
+                }, f"{save_dir}/model_{epoch+1}.chk")
+
+        scheduler.step()
 
         # Print a sample text after each epoch
         generate_and_print_sample(
             model, tokenizer, device, start_context
         )
-        if write_log:
-            torch.save({
-                "model":model,
-                "opt":optimizer,
-                "epoch":epoch,
-                "trainer":train_loader,
-                "val":val_loader,
-                "num_epochs":num_epochs,
-                "global_step":global_step
-            }, "checkpoint/model_{}.chk".format(epoch))
     return train_losses, val_losses, track_tokens_seen
 
 def evaluate_model(model, train_loader, val_loader, tokenizer, device, eval_iter):

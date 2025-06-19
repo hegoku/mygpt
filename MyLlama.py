@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import LlamaAttention
+import Attention
 
 class MyLlama(nn.Module):
     def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, head_num:int):
@@ -26,7 +26,7 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.norm1 = nn.RMSNorm(embedding_dim)
         self.norm2 = nn.RMSNorm(embedding_dim)
-        self.atten = LlamaAttention.LlamaMultiHeadAttention(max_context, embedding_dim, head_num)
+        self.atten = Attention.LlamaMultiHeadAttention(max_context, embedding_dim, head_num)
         self.ff = FeedForward(embedding_dim, 4*embedding_dim)
 
     def forward(self, x):

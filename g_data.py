@@ -43,7 +43,7 @@ def stream_and_chunk(dataset, chunk_size=512, stride=128):
 
         # yield {"id":example['id'], "text": res}
 
-chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset":stream_dataset})
+chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset":stream_dataset, "chunk_size":300, "stride":60})
 
 chunked_dataset.save_to_disk("train_wiki")
 
