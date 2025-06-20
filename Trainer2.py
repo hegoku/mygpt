@@ -42,7 +42,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
     # Initialize lists to track losses and tokens seen
     train_losses, val_losses, track_tokens_seen = [], [], []
     tokens_seen, global_step = 0, -1
-    scheduler = CosineAnnealingLR(optimizer, T_max=100, eta_min=0.00001)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0.00001)
 
     if write_log:
         run = wandb.init(
@@ -58,7 +58,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
     # Main training loop
     for epoch in range(num_epochs):
         model.train()  # Set model to training mode
-        train_loader.set_epoch(epoch)
+        # train_loader.set_epoch(epoch)
         
         for b_i, batch in enumerate(train_loader):
             # input_batch = []
@@ -84,34 +84,39 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 # val_losses.append(val_loss)
                 # track_tokens_seen.append(tokens_seen)
                 if write_log:
-                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
+                    # run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
+                    run.log({"epoch": epoch, "loss":loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
+                # print(f"Ep {epoch+1} (Step {global_step:09d}): "
+                    #   f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 print(f"Ep {epoch+1} (Step {global_step:09d}): "
-                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                      f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 
             if save_dir!=None and global_step>0 and (global_step % save_freq ==0):
                 torch.save({
                     "model":model,
-                    "opt":optimizer,
-                    "scheduler":scheduler,
+                    "opt":optimizer.state_dict(),
+                    "scheduler":scheduler.state_dict(),
                     "epoch":epoch,
-                    "trainer":train_loader,
-                    "val":val_loader,
+                    "trainer":train_loader.state_dict(),
+                    "val":val_loader.state_dict(),
                     "num_epochs":num_epochs,
                     "global_step":global_step
                 }, f"{save_dir}/model_{epoch+1}.chk")
+                print("Saved !!!")
 
         scheduler.step()
 
         torch.save({
             "model":model,
-            "opt":optimizer,
-            "scheduler":scheduler,
+            "opt":optimizer.state_dict(),
+            "scheduler":scheduler.state_dict(),
             "epoch":epoch,
-            "trainer":train_loader,
-            "val":val_loader,
+            "trainer":train_loader.state_dict(),
+            "val":val_loader.state_dict(),
             "num_epochs":num_epochs,
             "global_step":global_step
         }, f"{save_dir}/model_{epoch+1}.chk")
+        print("Saved !!!")
 
         # Print a sample text after each epoch
         generate_and_print_sample(
@@ -121,8 +126,9 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
 
 def evaluate_model(model, train_loader, val_loader, tokenizer, device, eval_iter):
     model.eval()
+    train_loss = 0
     with torch.no_grad():
-        train_loss = calc_loss_loader(train_loader, model, tokenizer, device, num_batches=eval_iter)
+        # train_loss = calc_loss_loader(train_loader, model, tokenizer, device, num_batches=eval_iter)
         val_loss = calc_loss_loader(val_loader, model, tokenizer, device, num_batches=eval_iter)
     model.train()
     return train_loss, val_loss
