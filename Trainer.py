@@ -1,5 +1,6 @@
 import torch
 import MyGPT
+import MyLlama
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import wandb
@@ -45,7 +46,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
             project="mygpt",
             # Track hyperparameters and run metadata.
             config={
-                "learning_rate": scheduler.get_last_lr(),
+                "learning_rate": scheduler.get_last_lr()[0],
                 "epochs": num_epochs,
             },
         )
@@ -75,11 +76,11 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 # val_losses.append(val_loss)
                 # track_tokens_seen.append(tokens_seen)
                 if write_log:
-                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()})
+                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
                 print(f"Ep {epoch+1} (Step {global_step:06d}): "
-                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()}")
+                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
             
-            if save_dir!=None and (global_step % save_freq ==0):
+            if save_dir!=None and global_step>0 and (global_step % save_freq ==0):
                 torch.save({
                     "model":model,
                     "opt":optimizer,
@@ -92,6 +93,17 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 }, f"{save_dir}/model_{epoch+1}.chk")
 
         scheduler.step()
+
+        torch.save({
+            "model":model,
+            "opt":optimizer,
+            "scheduler":scheduler,
+            "epoch":epoch,
+            "trainer":train_loader,
+            "val":val_loader,
+            "num_epochs":num_epochs,
+            "global_step":global_step
+        }, f"{save_dir}/model_{epoch+1}.chk")
 
         # if (b_idx + 1) % accumulation_steps != 0:
         #     optimizer.step()
@@ -118,7 +130,7 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
     # encoded = text_to_token_ids(start_context, tokenizer).to(device)
     encoded = tokenizer.encode(start_context).to(device)
     with torch.no_grad():
-        token_ids = MyGPT.generate_text(
+        token_ids = MyLlama.generate_text(
             model=model, idx=encoded.detach().clone().unsqueeze(0),
             max_tokens=30, max_context=model.max_context
         )

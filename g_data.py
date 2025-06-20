@@ -3,14 +3,15 @@ import DeepseekTokenizer
 import torch
 import os
 import zhconv
+import re
 
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 
 #1384748
 data_path = 'wikimedia/wikipedia'
-stream_dataset = load_dataset(data_path, "20231101.zh", split='train[0:1107798]')
+stream_dataset = load_dataset(data_path, "20231101.zh", split='train')
 # stream_dataset = load_dataset(data_path, "20231101.zh", split='train[1107798:]')
-stream_dataset = stream_dataset.to_iterable_dataset()
+# stream_dataset = stream_dataset.to_iterable_dataset()
 # stream_dataset = stream_dataset.shuffle(42, buffer_size=1000)
 stream_dataset = stream_dataset.batch(batch_size=1000)
 
@@ -43,7 +44,7 @@ def stream_and_chunk(dataset, chunk_size=512, stride=128):
 
         # yield {"id":example['id'], "text": res}
 
-chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset":stream_dataset, "chunk_size":300, "stride":60})
+chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset":stream_dataset, "chunk_size":1024, "stride":1024})
 
 chunked_dataset.save_to_disk("train_wiki")
 

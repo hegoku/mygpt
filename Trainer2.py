@@ -1,14 +1,15 @@
 import torch
 import MyGPT
+import MyLlama
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-def calc_loss_batch(input_batch, target_batch, model, device):
+def calc_loss_batch(input_batch, target_batch, model, device, ignore_index=-100):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
     logits = model(input_batch)
-    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten())
+    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten(), ignore_index=ignore_index)
     return loss
 
 
@@ -27,7 +28,7 @@ def calc_loss_loader(data_loader, model, tokenizer, device, num_batches=None):
             #     target_batch.append(tokenizer.encode(traget_b).tolist())
             # input_batch = torch.tensor(input_batch, device=device)
             # target_batch = torch.tensor(target_batch, device=device)
-            loss = calc_loss_batch(batch['input'], batch['target'], model, device)
+            loss = calc_loss_batch(batch['input'], batch['target'], model, device, ignore_index=tokenizer.pad_token_id)
             total_loss += loss.item()
             num += 1
         else:
@@ -49,7 +50,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
             project="mygpt",
             # Track hyperparameters and run metadata.
             config={
-                "learning_rate": scheduler.get_last_lr(),
+                "learning_rate": scheduler.get_last_lr()[0],
                 "epochs": num_epochs,
             },
         )
@@ -69,7 +70,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
             # input_batch = torch.tensor(input_batch, device=device)
             # target_batch = torch.tensor(target_batch, device=device)
             optimizer.zero_grad() # Reset loss gradients from previous batch iteration
-            loss = calc_loss_batch(batch['input'], batch['target'], model, device)
+            loss = calc_loss_batch(batch['input'], batch['target'], model, device, ignore_index=tokenizer.pad_token_id)
             loss.backward() # Calculate loss gradients
             optimizer.step() # Update model weights using loss gradients
             tokens_seen += batch['input'].numel()
@@ -83,11 +84,11 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 # val_losses.append(val_loss)
                 # track_tokens_seen.append(tokens_seen)
                 if write_log:
-                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()})
+                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
                 print(f"Ep {epoch+1} (Step {global_step:09d}): "
-                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()}")
+                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 
-            if save_dir!=None and (global_step % save_freq ==0):
+            if save_dir!=None and global_step>0 and (global_step % save_freq ==0):
                 torch.save({
                     "model":model,
                     "opt":optimizer,
@@ -100,6 +101,17 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 }, f"{save_dir}/model_{epoch+1}.chk")
 
         scheduler.step()
+
+        torch.save({
+            "model":model,
+            "opt":optimizer,
+            "scheduler":scheduler,
+            "epoch":epoch,
+            "trainer":train_loader,
+            "val":val_loader,
+            "num_epochs":num_epochs,
+            "global_step":global_step
+        }, f"{save_dir}/model_{epoch+1}.chk")
 
         # Print a sample text after each epoch
         generate_and_print_sample(
@@ -122,7 +134,7 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
     # encoded = text_to_token_ids(start_context, tokenizer).to(device)
     encoded = tokenizer.encode(start_context).to(device)
     with torch.no_grad():
-        token_ids = MyGPT.generate_text(
+        token_ids = MyLlama.generate_text(
             model=model, idx=encoded.detach().clone().unsqueeze(0),
             max_tokens=30, max_context=model.max_context
         )

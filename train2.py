@@ -3,6 +3,7 @@ from datasets import load_dataset
 from torch.utils.data import Dataset, DataLoader
 import MyDataset
 import MyGPT
+import MyLlama
 import Trainer
 import DeepseekTokenizer
 
@@ -16,21 +17,16 @@ else:
 print(f"Using {device} device.")
 
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
-model = MyGPT.MyGPT(tokenizer=tokenizer, layer=12 , max_context=256, embedding_dim=768, d_q=64, d_v=64, dropout=0.1, head_num=12).to(device=device, dtype=torch.bfloat16)
-
-def encode_data(data):
-    res = []
-    for d in data['text']:
-       res.append(tokenizer.encode(d))
-    return {'text':res}
+# model = MyGPT.MyGPT(tokenizer=tokenizer, layer=12 , max_context=256, embedding_dim=768, d_q=64, d_v=64, dropout=0.1, head_num=12).to(device=device, dtype=torch.bfloat16)
+model = MyLlama.MyLlama(tokenizer=tokenizer, layer=12 , max_context=1024, embedding_dim=768, head_num=12).to(device=device, dtype=torch.bfloat16)
 
 data_path = 'wikimedia/wikipedia'
 dataset = load_dataset(data_path, "20231101.zh", split='train[0:1000]')
-a = MyDataset.MyDataset2(dataset, tokenizer, 256, 50)
+a = MyDataset.MyDataset2(dataset, tokenizer, 1024, 512)
 
 train_loader = DataLoader(
    a,
-   batch_size=16,
+   batch_size=4,
    shuffle=True,
    drop_last=True,
    num_workers=0
@@ -38,10 +34,10 @@ train_loader = DataLoader(
 print("train data loaded")
 
 dataset = load_dataset(data_path, "20231101.zh", split='train[1000:1150]')
-b = MyDataset.MyDataset2(dataset, tokenizer, 256, 50)
+b = MyDataset.MyDataset2(dataset, tokenizer, 1024, 512)
 val_loader = DataLoader(
    b,
-   batch_size=16,
+   batch_size=4,
    shuffle=False,
    drop_last=False,
    num_workers=0
