@@ -9,7 +9,7 @@ tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 
 #1384748
 data_path = 'wikimedia/wikipedia'
-stream_dataset = load_dataset(data_path, "20231101.zh", split='train', num_proc=8)
+stream_dataset = load_dataset(data_path, "20231101.zh", split='train[0:1]', num_proc=8)
 # stream_dataset = load_dataset(data_path, "20231101.zh", split='train[1107798:]')
 # stream_dataset = stream_dataset.to_iterable_dataset()
 # stream_dataset = stream_dataset.shuffle(42, buffer_size=1000)
@@ -17,11 +17,16 @@ stream_dataset = stream_dataset.batch(batch_size=1000)
 
 current_input = []
 current_target = []
+pattern  = re.compile(r'(\{\|.*?\|\}\n)', flags=re.DOTALL)
 def stream_and_chunk(dataset, chunk_size=512, stride=128):
     for example in dataset:
-        # res = []
         for e in example['text']:
             i = 0
+            e = re.sub(pattern, '', e)
+            e = e.replace('\n\n', '')
+            e = e.replace('()', '')
+            e = e.replace('（）', '')
+            e = e.replace('（，', '（')
             text = e + tokenizer.eos_token
             token_ids = tokenizer.encode(zhconv.convert(text,"zh-hans"))
             remaining_size = token_ids.shape[0]
@@ -44,9 +49,12 @@ def stream_and_chunk(dataset, chunk_size=512, stride=128):
 
         # yield {"id":example['id'], "text": res}
 
-chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset":stream_dataset, "chunk_size":1024, "stride":256}, num_proc=8)
+chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset":stream_dataset, "chunk_size":1024, "stride":1024}, num_proc=8)
 
-chunked_dataset.save_to_disk("train_wiki")
+for i,b in enumerate(chunked_dataset):
+    print(tokenizer.decode(b['input']))
+
+# chunked_dataset.save_to_disk("train_wiki")
 
 # data_path = './train_wiki'
 # stream_dataset = load_from_disk(data_path)
