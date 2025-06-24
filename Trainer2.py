@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from tqdm import tqdm
 
 def calc_loss_batch(input_batch, target_batch, model, device, ignore_index=-100):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
@@ -57,6 +58,9 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
 
     # Main training loop
     for epoch in range(num_epochs):
+        pbar = tqdm(total=len(train_loader))
+        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+        pbar.set_postfix_str(f"Loss 0, Val loss 0, lr {scheduler.get_last_lr()[0]}")
         model.train()  # Set model to training mode
         # train_loader.set_epoch(epoch)
         
@@ -90,6 +94,9 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                     #   f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 print(f"Ep {epoch+1} (Step {global_step:09d}): "
                       f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+                pbar.set_postfix_str(f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                pbar.update(eval_freq)
                 
             if save_dir!=None and global_step>0 and (global_step % save_freq ==0):
                 torch.save({
@@ -105,23 +112,25 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 print("Saved !!!")
 
         scheduler.step()
+        pbar.close()
 
-        torch.save({
-            "model":model,
-            "opt":optimizer.state_dict(),
-            "scheduler":scheduler.state_dict(),
-            "epoch":epoch,
-            "trainer":train_loader.state_dict(),
-            "val":val_loader.state_dict(),
-            "num_epochs":num_epochs,
-            "global_step":global_step
-        }, f"{save_dir}/model_{epoch+1}.chk")
-        print("Saved !!!")
+        if save_dir!=None:
+            torch.save({
+                "model":model,
+                "opt":optimizer.state_dict(),
+                "scheduler":scheduler.state_dict(),
+                "epoch":epoch,
+                "trainer":train_loader.state_dict(),
+                "val":val_loader.state_dict(),
+                "num_epochs":num_epochs,
+                "global_step":global_step
+            }, f"{save_dir}/model_{epoch+1}.chk")
+            print("Saved !!!")
 
         # Print a sample text after each epoch
-        generate_and_print_sample(
+        pbar.write(generate_and_print_sample(
             model, tokenizer, device, start_context
-        )
+        ))
     return train_losses, val_losses, track_tokens_seen
 
 def evaluate_model(model, train_loader, val_loader, tokenizer, device, eval_iter):
@@ -146,8 +155,9 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
         )
     # decoded_text = token_ids_to_text(token_ids, tokenizer)
     decoded_text = tokenizer.decode(token_ids[0])
-    print(decoded_text.replace("\n", " "))  # Compact print format
+    # print(decoded_text.replace("\n", " "))  # Compact print format
     model.train()
+    return decoded_text
 
 def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses):
     fig, ax1 = plt.subplots(figsize=(5, 3))

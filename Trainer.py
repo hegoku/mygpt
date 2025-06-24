@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from tqdm import tqdm
 
 def calc_loss_batch(input_batch, target_batch, model, device):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
@@ -53,6 +54,9 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
 
     # Main training loop
     for epoch in range(num_epochs):
+        pbar = tqdm(total=len(train_loader))
+        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+        pbar.set_postfix_str(f"Loss 0, Train loss 0, Val loss 0, lr {scheduler.get_last_lr()[0]}")
         model.train()  # Set model to training mode
         
         for b_idx, (input_batch, target_batch) in enumerate(train_loader):
@@ -65,7 +69,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
             global_step += 1
 
             # if (b_idx + 1) % accumulation_steps == 0:
-                # optimizer.step()
+                # optimizer.step() 
                 # optimizer.zero_grad()
 
             # Optional evaluation step
@@ -77,8 +81,11 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 # track_tokens_seen.append(tokens_seen)
                 if write_log:
                     run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
-                print(f"Ep {epoch+1} (Step {global_step:06d}): "
-                      f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+                pbar.set_postfix_str(f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                pbar.update(eval_freq)
+                # print(f"Ep {epoch+1} (Step {global_step:06d}): "
+                    #   f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
             
             if save_dir!=None and global_step>0 and (global_step % save_freq ==0):
                 torch.save({
@@ -93,26 +100,28 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 }, f"{save_dir}/model_{epoch+1}.chk")
 
         scheduler.step()
+        pbar.close()
 
-        torch.save({
-            "model":model,
-            "opt":optimizer,
-            "scheduler":scheduler,
-            "epoch":epoch,
-            "trainer":train_loader,
-            "val":val_loader,
-            "num_epochs":num_epochs,
-            "global_step":global_step
-        }, f"{save_dir}/model_{epoch+1}.chk")
+        if save_dir!=None:
+            torch.save({
+                "model":model,
+                "opt":optimizer,
+                "scheduler":scheduler,
+                "epoch":epoch,
+                "trainer":train_loader,
+                "val":val_loader,
+                "num_epochs":num_epochs,
+                "global_step":global_step
+            }, f"{save_dir}/model_{epoch+1}.chk")
 
         # if (b_idx + 1) % accumulation_steps != 0:
         #     optimizer.step()
         #     optimizer.zero_grad()
 
         # Print a sample text after each epoch
-        generate_and_print_sample(
+        pbar.write(generate_and_print_sample(
             model, tokenizer, device, start_context
-        )
+        ))
     return train_losses, val_losses, track_tokens_seen
 
 def evaluate_model(model, train_loader, val_loader, device, eval_iter):
@@ -136,8 +145,8 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
         )
     # decoded_text = token_ids_to_text(token_ids, tokenizer)
     decoded_text = tokenizer.decode(token_ids[0])
-    print(decoded_text.replace("\n", " "))  # Compact print format
     model.train()
+    return decoded_text
 
 def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses):
     fig, ax1 = plt.subplots(figsize=(5, 3))

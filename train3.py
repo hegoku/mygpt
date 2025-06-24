@@ -8,6 +8,7 @@ import Trainer2
 import DeepseekTokenizer
 import os
 from torchdata.stateful_dataloader import StatefulDataLoader
+import bitsandbytes as bnb
 
 torch.manual_seed(123)
 if torch.cuda.is_available():
@@ -37,7 +38,10 @@ print("train data loaded")
 val_loader = StatefulDataLoader(train_dataset, batch_size=5, shuffle=True)
 print("val data loaded")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1)
+if torch.cuda.is_available():
+   optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=0.0004, weight_decay=0.1)
+else:
+   optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1, fused=True)
 num_epochs = 50
 train_losses, val_losses, tokens_seen = Trainer2.train_model_simple(
     model, train_loader, val_loader, optimizer, device,

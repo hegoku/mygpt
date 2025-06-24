@@ -6,6 +6,7 @@ import MyGPT
 import MyLlama
 import Trainer
 import DeepseekTokenizer
+import bitsandbytes as bnb
 
 torch.manual_seed(123)
 if torch.cuda.is_available():
@@ -21,7 +22,7 @@ tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 model = MyLlama.MyLlama(tokenizer=tokenizer, layer=12 , max_context=1024, embedding_dim=768, head_num=12).to(device=device, dtype=torch.bfloat16)
 
 data_path = 'wikimedia/wikipedia'
-dataset = load_dataset(data_path, "20231101.zh", split='train[0:1000]')
+dataset = load_dataset(data_path, "20231101.zh", split='train[0:9]')
 a = MyDataset.MyDataset2(dataset, tokenizer, 1024, 512)
 
 train_loader = DataLoader(
@@ -44,7 +45,10 @@ val_loader = DataLoader(
 )
 print("val data loaded")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1)
+if torch.cuda.is_available():
+   optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=0.0004, weight_decay=0.1)
+else:
+   optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1, fused=True)
 num_epochs = 20
 train_losses, val_losses, tokens_seen = Trainer.train_model_simple(
     model, train_loader, val_loader, optimizer, device,
