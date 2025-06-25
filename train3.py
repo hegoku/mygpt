@@ -28,7 +28,7 @@ train_dataset = load_from_disk('./train_wiki')
 # train_dataset = train_dataset.shuffle(123, buffer_size=100)
 # train_dataset = train_dataset.batch(batch_size=16)
 train_dataset = train_dataset.with_format("torch")
-train_loader = StatefulDataLoader(train_dataset, batch_size=5, shuffle=True)
+train_loader = StatefulDataLoader(train_dataset, batch_size=5, shuffle=True, drop_last=True)
 print("train data loaded")
 
 # val_dataset = load_from_disk('./val_wiki')

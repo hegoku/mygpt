@@ -9,7 +9,7 @@ class MyLlama(nn.Module):
         self.tokenizer = tokenizer
         self.embedding_dim = embedding_dim
         self.max_context = max_context
-        self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim)
+        self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim, padding_idx=tokenizer.pad_token_id)
         self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, head_num) for _ in range(layer)])
         self.norm = nn.RMSNorm(embedding_dim)
         self.output = nn.Linear(embedding_dim, tokenizer.len(), bias=False)

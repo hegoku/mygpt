@@ -7,14 +7,14 @@ import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
-def calc_loss_batch(input_batch, target_batch, model, device):
+def calc_loss_batch(input_batch, target_batch, model, device, ignore_index=-100):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
     logits = model(input_batch)
-    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten())
+    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten(), ignore_index=ignore_index)
     return loss
 
 
-def calc_loss_loader(data_loader, model, device, num_batches=None):
+def calc_loss_loader(data_loader, model, device, tokenizer, num_batches=None):
     total_loss = 0.
     if len(data_loader) == 0:
         return float("nan")
@@ -26,7 +26,7 @@ def calc_loss_loader(data_loader, model, device, num_batches=None):
         num_batches = min(num_batches, len(data_loader))
     for i, (input_batch, target_batch) in enumerate(data_loader):
         if i < num_batches:
-            loss = calc_loss_batch(input_batch, target_batch, model, device)
+            loss = calc_loss_batch(input_batch, target_batch, model, device, ignore_index=tokenizer.pad_token_id)
             total_loss += loss.item()
         else:
             break
@@ -37,9 +37,9 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
     # Initialize lists to track losses and tokens seen
     train_losses, val_losses, track_tokens_seen = [], [], []
     tokens_seen, global_step = 0, -1
-    scheduler = CosineAnnealingLR(optimizer, T_max=100, eta_min=0.00001)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0.00001)
 
-    accumulation_steps = 4
+    accumulation_steps = 1
 
     if write_log:
         run = wandb.init(
@@ -55,13 +55,13 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
     # Main training loop
     for epoch in range(num_epochs):
         pbar = tqdm(total=len(train_loader))
-        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {0:09d})")
         pbar.set_postfix_str(f"Loss 0, Train loss 0, Val loss 0, lr {scheduler.get_last_lr()[0]}")
         model.train()  # Set model to training mode
         
         for b_idx, (input_batch, target_batch) in enumerate(train_loader):
             optimizer.zero_grad() # Reset loss gradients from previous batch iteration
-            loss = calc_loss_batch(input_batch, target_batch, model, device)
+            loss = calc_loss_batch(input_batch, target_batch, model, device, ignore_index=tokenizer.pad_token_id)
             # loss = loss / accumulation_steps
             loss.backward() # Calculate loss gradients
             optimizer.step() # Update model weights using loss gradients
@@ -69,20 +69,20 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
             global_step += 1
 
             # if (b_idx + 1) % accumulation_steps == 0:
-                # optimizer.step() 
-                # optimizer.zero_grad()
+            #     optimizer.step() 
+            #     optimizer.zero_grad()
 
             # Optional evaluation step
             if global_step % eval_freq == 0:
                 train_loss, val_loss = evaluate_model(
-                    model, train_loader, val_loader, device, eval_iter)
+                    model, train_loader, val_loader, device, tokenizer, eval_iter)
                 # train_losses.append(train_loss)
                 # val_losses.append(val_loss)
                 # track_tokens_seen.append(tokens_seen)
                 if write_log:
-                    run.log({"epoch": epoch, "loss":loss, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
-                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
-                pbar.set_postfix_str(f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                    run.log({"epoch": epoch, "loss":loss*accumulation_steps, "train_loss": train_loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
+                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {global_step:09d})")
+                pbar.set_postfix_str(f"Loss {loss*accumulation_steps:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 pbar.update(eval_freq)
                 # print(f"Ep {epoch+1} (Step {global_step:06d}): "
                     #   f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
@@ -99,6 +99,10 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                     "global_step":global_step
                 }, f"{save_dir}/model_{epoch+1}.chk")
 
+        # if (b_idx + 1) % accumulation_steps != 0:
+        #     optimizer.step()
+        #     optimizer.zero_grad()
+
         scheduler.step()
         pbar.close()
 
@@ -114,21 +118,17 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 "global_step":global_step
             }, f"{save_dir}/model_{epoch+1}.chk")
 
-        # if (b_idx + 1) % accumulation_steps != 0:
-        #     optimizer.step()
-        #     optimizer.zero_grad()
-
         # Print a sample text after each epoch
         pbar.write(generate_and_print_sample(
             model, tokenizer, device, start_context
         ))
     return train_losses, val_losses, track_tokens_seen
 
-def evaluate_model(model, train_loader, val_loader, device, eval_iter):
+def evaluate_model(model, train_loader, val_loader, device, tokenizer, eval_iter):
     model.eval()
     with torch.no_grad():
-        train_loss = calc_loss_loader(train_loader, model, device, num_batches=eval_iter)
-        val_loss = calc_loss_loader(val_loader, model, device, num_batches=eval_iter)
+        train_loss = calc_loss_loader(train_loader, model, device, tokenizer, num_batches=eval_iter)
+        val_loss = calc_loss_loader(val_loader, model, device, tokenizer, num_batches=eval_iter)
     model.train()
     return train_loss, val_loss
 

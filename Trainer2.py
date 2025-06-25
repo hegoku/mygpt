@@ -6,6 +6,7 @@ from matplotlib.ticker import MaxNLocator
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
+import uuid
 
 def calc_loss_batch(input_batch, target_batch, model, device, ignore_index=-100):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
@@ -39,11 +40,26 @@ def calc_loss_loader(data_loader, model, tokenizer, device, num_batches=None):
     return 0
 
 def train_model_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
-                       eval_freq, eval_iter, start_context, tokenizer, write_log=False, save_dir=None, save_freq=1000):
+                       eval_freq, eval_iter, start_context, tokenizer, write_log=False, save_dir=None, save_freq=1000, resume=False):
     # Initialize lists to track losses and tokens seen
     train_losses, val_losses, track_tokens_seen = [], [], []
     tokens_seen, global_step = 0, -1
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0.00001)
+
+    start_epoch = 0
+    if resume==True and save_dir!=None:
+        del model
+        tmp = torch.load(save_dir, weights_only=False)
+        model = tmp['model']
+        scheduler.load_state_dict(tmp['scheduler'])
+        optimizer.load_state_dict(tmp['opt'])
+        train_loader.load_state_dict = tmp['trainer']
+        val_loader.load_state_dict = tmp['val']
+        start_epoch = tmp['epoch']
+        global_step = tmp['global_step']
+        run_id = tmp['run_id']
+    else:
+        run_id = str(uuid.uuid4())
 
     if write_log:
         run = wandb.init(
@@ -54,25 +70,19 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 "learning_rate": scheduler.get_last_lr()[0],
                 "epochs": num_epochs,
             },
+            id=run_id,
+            resume="allow"
         )
 
     # Main training loop
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         pbar = tqdm(total=len(train_loader))
-        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {0:09d})")
         pbar.set_postfix_str(f"Loss 0, Val loss 0, lr {scheduler.get_last_lr()[0]}")
         model.train()  # Set model to training mode
         # train_loader.set_epoch(epoch)
         
         for b_i, batch in enumerate(train_loader):
-            # input_batch = []
-            # target_batch = []
-            # for input_b in batch['input']:
-                # input_batch.append(tokenizer.encode(input_b).tolist())
-            # for traget_b in batch['target']:
-                # target_batch.append(tokenizer.encode(traget_b).tolist())
-            # input_batch = torch.tensor(input_batch, device=device)
-            # target_batch = torch.tensor(target_batch, device=device)
             optimizer.zero_grad() # Reset loss gradients from previous batch iteration
             loss = calc_loss_batch(batch['input'], batch['target'], model, device, ignore_index=tokenizer.pad_token_id)
             loss.backward() # Calculate loss gradients
@@ -92,9 +102,9 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                     run.log({"epoch": epoch, "loss":loss, "val_loss":val_loss, "lr":scheduler.get_last_lr()[0]})
                 # print(f"Ep {epoch+1} (Step {global_step:09d}): "
                     #   f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
-                print(f"Ep {epoch+1} (Step {global_step:09d}): "
-                      f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
-                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {(global_step+1):09d})")
+                # print(f"Ep {epoch+1} (Step {global_step:09d}): "
+                    #   f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {global_step:09d})")
                 pbar.set_postfix_str(f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 pbar.update(eval_freq)
                 
@@ -107,7 +117,8 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                     "trainer":train_loader.state_dict(),
                     "val":val_loader.state_dict(),
                     "num_epochs":num_epochs,
-                    "global_step":global_step
+                    "global_step":global_step,
+                    "run_id":run_id
                 }, f"{save_dir}/model_{epoch+1}.chk")
                 print("Saved !!!")
 
@@ -123,7 +134,8 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 "trainer":train_loader.state_dict(),
                 "val":val_loader.state_dict(),
                 "num_epochs":num_epochs,
-                "global_step":global_step
+                "global_step":global_step,
+                "run_id":run_id
             }, f"{save_dir}/model_{epoch+1}.chk")
             print("Saved !!!")
 
@@ -131,6 +143,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
         pbar.write(generate_and_print_sample(
             model, tokenizer, device, start_context
         ))
+    wandb.finish(0)
     return train_losses, val_losses, track_tokens_seen
 
 def evaluate_model(model, train_loader, val_loader, tokenizer, device, eval_iter):

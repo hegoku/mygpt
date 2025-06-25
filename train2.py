@@ -22,7 +22,7 @@ tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 model = MyLlama.MyLlama(tokenizer=tokenizer, layer=12 , max_context=1024, embedding_dim=768, head_num=12).to(device=device, dtype=torch.bfloat16)
 
 data_path = 'wikimedia/wikipedia'
-dataset = load_dataset(data_path, "20231101.zh", split='train[0:9]')
+dataset = load_dataset(data_path, "20231101.zh", split='train[0:1000]')
 a = MyDataset.MyDataset2(dataset, tokenizer, 1024, 512)
 
 train_loader = DataLoader(
@@ -52,7 +52,7 @@ else:
 num_epochs = 20
 train_losses, val_losses, tokens_seen = Trainer.train_model_simple(
     model, train_loader, val_loader, optimizer, device,
-    num_epochs=num_epochs, eval_freq=5, eval_iter=5,
+    num_epochs=num_epochs, eval_freq=5, eval_iter=16,
     start_context="例如在西非", tokenizer=tokenizer, write_log=False
 )
 
