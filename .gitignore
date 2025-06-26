@@ -6,3 +6,5 @@ val_wiki/
 train_wiki/
 wandb/
 checkpoint/
+
+*.DS_Store
