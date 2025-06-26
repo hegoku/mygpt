@@ -9,6 +9,7 @@ class MyLlama(nn.Module):
         self.tokenizer = tokenizer
         self.embedding_dim = embedding_dim
         self.max_context = max_context
+        self.head_num = head_num
         self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim, padding_idx=tokenizer.pad_token_id)
         self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, head_num) for _ in range(layer)])
         self.norm = nn.RMSNorm(embedding_dim)
@@ -24,6 +25,7 @@ class MyLlama(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(self, max_context:int, embedding_dim:int, head_num:int):
         super().__init__()
+        self.head_num = head_num
         self.norm1 = nn.RMSNorm(embedding_dim)
         self.norm2 = nn.RMSNorm(embedding_dim)
         self.atten = Attention.LlamaMultiHeadAttention(max_context, embedding_dim, head_num)

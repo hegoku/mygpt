@@ -44,7 +44,7 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
     # Initialize lists to track losses and tokens seen
     train_losses, val_losses, track_tokens_seen = [], [], []
     tokens_seen, global_step = 0, -1
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0.00001)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0.00003)
 
     start_epoch = 0
     if resume==True and save_dir!=None:
@@ -143,7 +143,8 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
         pbar.write(generate_and_print_sample(
             model, tokenizer, device, start_context
         ))
-    wandb.finish(0)
+    if write_log:
+        wandb.finish(0)
     return train_losses, val_losses, track_tokens_seen
 
 def evaluate_model(model, train_loader, val_loader, tokenizer, device, eval_iter):

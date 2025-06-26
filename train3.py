@@ -28,25 +28,25 @@ train_dataset = load_from_disk('./train_wiki')
 # train_dataset = train_dataset.shuffle(123, buffer_size=100)
 # train_dataset = train_dataset.batch(batch_size=16)
 train_dataset = train_dataset.with_format("torch")
-train_loader = StatefulDataLoader(train_dataset, batch_size=5, shuffle=True, drop_last=True)
+train_loader = StatefulDataLoader(train_dataset, batch_size=4, shuffle=True, drop_last=False)
 print("train data loaded")
 
-# val_dataset = load_from_disk('./val_wiki')
+val_dataset = load_from_disk('./val_wiki')
 # val_loader = val_loader.to_iterable_dataset()
 # val_dataset = val_dataset.batch(batch_size=16)
-# val_dataset = val_dataset.with_format("torch")
-val_loader = StatefulDataLoader(train_dataset, batch_size=5, shuffle=True)
+val_dataset = val_dataset.with_format("torch")
+val_loader = StatefulDataLoader(val_dataset, batch_size=4, shuffle=False)
 print("val data loaded")
 
 if torch.cuda.is_available():
-   optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=0.0004, weight_decay=0.1)
+   optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=0.0004, weight_decay=0.1, betas=(0.9, 0.95))
 else:
-   optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1, fused=True)
-num_epochs = 50
+   optimizer = torch.optim.AdamW(model.parameters(), lr=0.0004, weight_decay=0.1, fused=True, betas=(0.9, 0.95))
+num_epochs = 20
 train_losses, val_losses, tokens_seen = Trainer2.train_model_simple(
     model, train_loader, val_loader, optimizer, device,
-    num_epochs=num_epochs, eval_freq=100, eval_iter=5,
-    start_context="例如在西非", tokenizer=tokenizer, write_log=True, save_dir="./checkpoint", save_freq=30000
+    num_epochs=num_epochs, eval_freq=5, eval_iter=4,
+    start_context="例如在西非", tokenizer=tokenizer, write_log=True, save_dir="./checkpoint", save_freq=10000
 )
 
 # epochs_tensor = torch.linspace(0, num_epochs, len(train_losses))

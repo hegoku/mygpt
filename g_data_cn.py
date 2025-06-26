@@ -2,22 +2,17 @@ from datasets import load_dataset, Dataset, load_from_disk
 import DeepseekTokenizer
 import torch
 import os
-import zhconv
 import re
 
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 
 #1384748
-data_path = 'wikimedia/wikipedia'
-stream_dataset = load_dataset(data_path, "20231101.zh", split='train')
-# stream_dataset = load_dataset(data_path, "20231101.zh", split='train[1107798:]')
-# stream_dataset = stream_dataset.to_iterable_dataset()
-# stream_dataset = stream_dataset.shuffle(42, buffer_size=1000)
+data_path = 'fjcanyue/wikipedia-zh-cn'
+stream_dataset = load_dataset(data_path, split='train')
 stream_dataset = stream_dataset.batch(batch_size=1000)
 
 current_input = []
 current_target = []
-pattern  = re.compile(r'(\{\|.*?\|\}\n)', flags=re.DOTALL)
 g1024 = 0
 g512 = 0
 g256 = 0
@@ -32,15 +27,10 @@ def stream_and_chunk(dataset, chunk_size=512, stride=128):
     for example in dataset:
         for e in example['text']:
             i = 0
-            e = re.sub(pattern, '', e)
-            e = e.replace('\n\n', '')
-            e = e.replace('()', '')
-            e = e.replace('（）', '')
-            e = e.replace('（，', '（')
             text = e + tokenizer.eos_token
-            token_ids = tokenizer.encode(zhconv.convert(text,"zh-hans"))
+            token_ids = tokenizer.encode(text)
             remaining_size = token_ids.shape[0]
-            if remaining_size>=256 or remaining_size<128:
+            if remaining_size<1024:
                 continue
             # if remaining_size>=1024:
             #     g1024 +=1
@@ -77,7 +67,7 @@ chunked_dataset = Dataset.from_generator(stream_and_chunk, gen_kwargs={"dataset"
     # print(tokenizer.decode(b['input']))
 
 # print(g1024, g512, g256, g128, g0, end="\n")
-chunked_dataset.save_to_disk("val_wiki")
+chunked_dataset.save_to_disk("train_wiki")
 
 # data_path = './train_wiki'
 # stream_dataset = load_from_disk(data_path)
