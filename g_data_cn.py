@@ -54,7 +54,7 @@ def stream_and_chunk(dataset, chunk_size=512, stride=128):
                     input_chunk = token_ids[i:i + chunk_size]
                     target_chunk = token_ids[i + 1: i + chunk_size + 1]
                 # yield {"input":tokenizer.decode(input_chunk.detach().clone()), "target":tokenizer.decode(target_chunk.detach().clone())}
-                yield {"input":input_chunk.detach().clone(), "target":target_chunk.detach().clone()}
+                yield {"input":input_chunk, "target":target_chunk}
                 # res.append({"i":input_chunk.detach().clone(), "t":target_chunk.detach().clone()})
                 i = i+stride
                 remaining_size = remaining_size -stride
