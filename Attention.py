@@ -136,6 +136,8 @@ class MultiHeadAttention(nn.Module):
         return output
 
 class LlamaMultiHeadAttention(nn.Module):
+    freqs_cis = None
+
     def __init__(self, max_context:int, embedding_dim:int, head_num:int):
         super().__init__()
         assert embedding_dim % head_num == 0, "embedding_dim must be divisible by head_num"
@@ -151,15 +153,16 @@ class LlamaMultiHeadAttention(nn.Module):
         self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=False)
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=False)
         self.register_buffer("mask", torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1))
-        self.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
+        if LlamaMultiHeadAttention.freqs_cis is None:
+            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
 
     def forward(self, embedding_word):
         token_num = embedding_word.shape[-2]
         q = self.w_Q(embedding_word)
         k = self.w_K(embedding_word)
         v = self.w_V(embedding_word)
-        if self.freqs_cis.device!=q.device:
-            self.freqs_cis = self.freqs_cis.to(q.device)
+        if LlamaMultiHeadAttention.freqs_cis.device!=q.device:
+            LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
 
         # We implicitly split the matrix by adding a `num_heads` dimension
         # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
@@ -177,7 +180,7 @@ class LlamaMultiHeadAttention(nn.Module):
         k = k.transpose(-3, -2)
         v = v.transpose(-3, -2)
 
-        q, k = apply_rotary_emb(q, k, freqs_cis=self.freqs_cis[:token_num,:])
+        q, k = apply_rotary_emb(q, k, freqs_cis=LlamaMultiHeadAttention.freqs_cis[:token_num,:])
 
         scores = q @ k.transpose(-2, -1)
         scores.masked_fill_(self.mask.bool()[:token_num, :token_num], -torch.inf)
