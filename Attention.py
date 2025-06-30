@@ -78,6 +78,9 @@ class MultiHeadAttentionWrapper(nn.Module):
         return self.output(output)
 
 class MultiHeadAttention(nn.Module):
+    freqs_cis = None
+    mask = None
+
     def __init__(self, max_context:int, embedding_dim:int, head_num:int, dropout=0.0, bias=False):
         super().__init__()
         self.max_context = max_context
@@ -91,8 +94,11 @@ class MultiHeadAttention(nn.Module):
         self.w_K = nn.Linear(embedding_dim, embedding_dim, bias=bias)
         self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=bias)
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=bias)
-        self.register_buffer("mask", torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1))
-        self.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
+        if LlamaMultiHeadAttention.freqs_cis is None:
+            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
+
+        if LlamaMultiHeadAttention.mask is None:
+            LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
         self.linear_bias = bias
         self.dropout = nn.Dropout(dropout)
 
@@ -101,68 +107,10 @@ class MultiHeadAttention(nn.Module):
         q = self.w_Q(embedding_word)
         k = self.w_K(embedding_word)
         v = self.w_V(embedding_word)
-        if self.freqs_cis.device!=q.device:
-            self.freqs_cis = self.freqs_cis.to(q.device)
-
-        # We implicitly split the matrix by adding a `num_heads` dimension
-        # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
-        # q = q.view(b, num_tokens, self.num_heads, self.head_dim)
-        # k = k.view(b, num_tokens, self.num_heads, self.head_dim)
-        # v = v.view(b, num_tokens, self.num_heads, self.head_dim)
-        # 为了支持不是batch的，改用下方式
-        # q = q.view(b, num_tokens, self.num_heads, self.head_dim) or # q = q.view(num_tokens, self.num_heads, self.head_dim)
-        q = q.view(*q.shape[:-1], self.head_num, self.d_q)
-        k = k.view(*k.shape[:-1], self.head_num, self.d_q)
-        v = v.view(*v.shape[:-1], self.head_num, self.d_v)
-
-        # Transpose: (b, num_tokens, num_heads, head_dim) -> (b, num_heads, num_tokens, head_dim)
-        q = q.transpose(-3, -2)
-        k = k.transpose(-3, -2)
-        v = v.transpose(-3, -2)
-
-        q, k = apply_rotary_emb(q, k, freqs_cis=self.freqs_cis[:token_num,:])
-
-        scores = q @ k.transpose(-2, -1)
-        scores.masked_fill_(self.mask.bool()[:token_num, :token_num], -torch.inf)
-        weights = torch.softmax(scores / self.softmax_factor, dim=-1)
-        weights = self.dropout(weights)
-
-        # Shape: (b, num_tokens, num_heads, head_dim)
-        output = (weights @ v).transpose(-3, -2)
-
-        # Combine heads, where self.embedding_size = self.head_num * self.d_q
-        output = output.reshape(*output.shape[:-2], self.embedding_size)
-        output = self.output(output)
-        return output
-
-class LlamaMultiHeadAttention(nn.Module):
-    freqs_cis = None
-
-    def __init__(self, max_context:int, embedding_dim:int, head_num:int):
-        super().__init__()
-        assert embedding_dim % head_num == 0, "embedding_dim must be divisible by head_num"
-        self.max_context = max_context
-        self.embedding_size = embedding_dim
-        self.head_num = head_num
-        self.d_q = self.embedding_size // head_num
-        self.d_v = self.d_q
-        self.softmax_factor = self.d_q**0.5
-
-        self.w_Q = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.w_K = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.output = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.register_buffer("mask", torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1))
-        if LlamaMultiHeadAttention.freqs_cis is None:
-            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
-
-    def forward(self, embedding_word):
-        token_num = embedding_word.shape[-2]
-        q = self.w_Q(embedding_word)
-        k = self.w_K(embedding_word)
-        v = self.w_V(embedding_word)
         if LlamaMultiHeadAttention.freqs_cis.device!=q.device:
             LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
+        if LlamaMultiHeadAttention.mask.device!=q.device:
+            LlamaMultiHeadAttention.mask = LlamaMultiHeadAttention.mask.to(q.device)
 
         # We implicitly split the matrix by adding a `num_heads` dimension
         # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
@@ -183,7 +131,73 @@ class LlamaMultiHeadAttention(nn.Module):
         q, k = apply_rotary_emb(q, k, freqs_cis=LlamaMultiHeadAttention.freqs_cis[:token_num,:])
 
         scores = q @ k.transpose(-2, -1)
-        scores.masked_fill_(self.mask.bool()[:token_num, :token_num], -torch.inf)
+        scores.masked_fill_(LlamaMultiHeadAttention.mask.bool()[:token_num, :token_num], -torch.inf)
+        weights = torch.softmax(scores / self.softmax_factor, dim=-1)
+        weights = self.dropout(weights)
+
+        # Shape: (b, num_tokens, num_heads, head_dim)
+        output = (weights @ v).transpose(-3, -2)
+
+        # Combine heads, where self.embedding_size = self.head_num * self.d_q
+        output = output.reshape(*output.shape[:-2], self.embedding_size)
+        output = self.output(output)
+        return output
+
+class LlamaMultiHeadAttention(nn.Module):
+    freqs_cis = None
+    mask = None
+
+    def __init__(self, max_context:int, embedding_dim:int, head_num:int):
+        super().__init__()
+        assert embedding_dim % head_num == 0, "embedding_dim must be divisible by head_num"
+        self.max_context = max_context
+        self.embedding_size = embedding_dim
+        self.head_num = head_num
+        self.d_q = self.embedding_size // head_num
+        self.d_v = self.d_q
+        self.softmax_factor = self.d_q**0.5
+
+        self.w_Q = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.w_K = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.output = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        # self.register_buffer("mask", torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1))
+        if LlamaMultiHeadAttention.freqs_cis is None:
+            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
+
+        if LlamaMultiHeadAttention.mask is None:
+            LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
+
+    def forward(self, embedding_word):
+        token_num = embedding_word.shape[-2]
+        q = self.w_Q(embedding_word)
+        k = self.w_K(embedding_word)
+        v = self.w_V(embedding_word)
+        if LlamaMultiHeadAttention.freqs_cis.device!=q.device:
+            LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
+        if LlamaMultiHeadAttention.mask.device!=q.device:
+            LlamaMultiHeadAttention.mask = LlamaMultiHeadAttention.mask.to(q.device)
+
+        # We implicitly split the matrix by adding a `num_heads` dimension
+        # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
+        # q = q.view(b, num_tokens, self.num_heads, self.head_dim)
+        # k = k.view(b, num_tokens, self.num_heads, self.head_dim)
+        # v = v.view(b, num_tokens, self.num_heads, self.head_dim)
+        # 为了支持不是batch的，改用下方式
+        # q = q.view(b, num_tokens, self.num_heads, self.head_dim) or # q = q.view(num_tokens, self.num_heads, self.head_dim)
+        q = q.view(*q.shape[:-1], self.head_num, self.d_q)
+        k = k.view(*k.shape[:-1], self.head_num, self.d_q)
+        v = v.view(*v.shape[:-1], self.head_num, self.d_v)
+
+        # Transpose: (b, num_tokens, num_heads, head_dim) -> (b, num_heads, num_tokens, head_dim)
+        q = q.transpose(-3, -2)
+        k = k.transpose(-3, -2)
+        v = v.transpose(-3, -2)
+
+        q, k = apply_rotary_emb(q, k, freqs_cis=LlamaMultiHeadAttention.freqs_cis[:token_num,:])
+
+        scores = q @ k.transpose(-2, -1)
+        scores.masked_fill_(LlamaMultiHeadAttention.mask.bool()[:token_num, :token_num], -torch.inf)
         weights = torch.softmax(scores / self.softmax_factor, dim=-1)
 
         # Shape: (b, num_tokens, num_heads, head_dim)
