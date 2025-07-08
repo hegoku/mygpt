@@ -8,10 +8,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import uuid
 
-def calc_loss_batch(input_batch, target_batch, model, device, ignore_index=-100):
+def calc_loss_batch(input_batch, target_batch, model, device, ignore_index=-100, reduction='mean'):
     input_batch, target_batch = input_batch.to(device), target_batch.to(device)
     logits = model(input_batch)
-    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten(), ignore_index=ignore_index)
+    loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), target_batch.flatten(), ignore_index=ignore_index, reduction=reduction)
     return loss
 
 
@@ -22,14 +22,6 @@ def calc_loss_loader(data_loader, model, tokenizer, device, num_batches=None):
     num = 0
     for i, batch in enumerate(data_loader):
         if i < num_batches:
-            # input_batch = []
-            # target_batch = []
-            # for input_b in batch['input']:
-            #     input_batch.append(tokenizer.encode(input_b).tolist())
-            # for traget_b in batch['target']:
-            #     target_batch.append(tokenizer.encode(traget_b).tolist())
-            # input_batch = torch.tensor(input_batch, device=device)
-            # target_batch = torch.tensor(target_batch, device=device)
             loss = calc_loss_batch(batch['input'], batch['target'], model, device, ignore_index=tokenizer.pad_token_id)
             total_loss += loss.item()
             num += 1
@@ -40,24 +32,27 @@ def calc_loss_loader(data_loader, model, tokenizer, device, num_batches=None):
     return 0
 
 def train_model_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
-                       eval_freq, eval_iter, start_context, tokenizer, write_log=False, save_dir=None, save_freq=1000, resume=False):
+                       eval_freq, eval_iter, start_context, tokenizer, write_log=False, save_dir=None, save_freq=1000, resume=None):
     # Initialize lists to track losses and tokens seen
     train_losses, val_losses, track_tokens_seen = [], [], []
     tokens_seen, global_step = 0, -1
+    total_iters = len(train_loader)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0.00003)
 
     start_epoch = 0
-    if resume==True and save_dir!=None:
-        del model
-        tmp = torch.load(save_dir, weights_only=False)
-        model = tmp['model']
+    start_step = 0
+    if resume!=None:
+        tmp = torch.load(resume, weights_only=False)
+        model.load_state_dict(tmp['model'].state_dict())
         scheduler.load_state_dict(tmp['scheduler'])
         optimizer.load_state_dict(tmp['opt'])
-        train_loader.load_state_dict = tmp['trainer']
-        val_loader.load_state_dict = tmp['val']
+        train_loader.load_state_dict(tmp['trainer'])
+        val_loader.load_state_dict(tmp['val'])
         start_epoch = tmp['epoch']
         global_step = tmp['global_step']
         run_id = tmp['run_id']
+        start_step = tmp['step']
+        del tmp
     else:
         run_id = str(uuid.uuid4())
 
@@ -76,17 +71,17 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
 
     # Main training loop
     for epoch in range(start_epoch, num_epochs):
-        pbar = tqdm(total=len(train_loader))
-        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {0:09d})")
-        pbar.set_postfix_str(f"Loss 0, Val loss 0, lr {scheduler.get_last_lr()[0]}")
+        pbar = tqdm(total=len(train_loader), initial=start_step)
+        pbar.set_description_str(f"Ep {epoch+1}/{num_epochs}")
+        pbar.set_postfix_str(f"Loss 0 Val 0 lr {scheduler.get_last_lr()[0]:.10f}")
         model.train()  # Set model to training mode
-        # train_loader.set_epoch(epoch)
         
         for b_i, batch in enumerate(train_loader):
-            optimizer.zero_grad() # Reset loss gradients from previous batch iteration
             loss = calc_loss_batch(batch['input'], batch['target'], model, device, ignore_index=tokenizer.pad_token_id)
             loss.backward() # Calculate loss gradients
             optimizer.step() # Update model weights using loss gradients
+            optimizer.zero_grad() # Reset loss gradients from previous batch iteration
+            scheduler.step(epoch+b_i/total_iters)
             tokens_seen += batch['input'].numel()
             global_step += 1
 
@@ -104,8 +99,8 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                     #   f"Loss {loss:.3f}, Train loss {train_loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
                 # print(f"Ep {epoch+1} (Step {global_step:09d}): "
                     #   f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
-                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs} (Step {global_step:09d})")
-                pbar.set_postfix_str(f"Loss {loss:.3f}, Val loss {val_loss:.3f}, lr {scheduler.get_last_lr()[0]}")
+                pbar.set_description_str(f"Ep {epoch+1}/{num_epochs}")
+                pbar.set_postfix_str(f"Loss {loss:.3f} Val {val_loss:.3f} lr {scheduler.get_last_lr()[0]:.10f}")
                 pbar.update(eval_freq)
                 
             if save_dir!=None and global_step>0 and (global_step % save_freq ==0):
@@ -118,9 +113,10 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                     "val":val_loader.state_dict(),
                     "num_epochs":num_epochs,
                     "global_step":global_step,
+                    "step":b_i,
                     "run_id":run_id
                 }, f"{save_dir}/model_{epoch+1}.chk")
-                print("Saved !!!")
+                pbar.write("Saved !!!")
 
         scheduler.step()
         pbar.close()
@@ -135,9 +131,10 @@ def train_model_simple(model, train_loader, val_loader, optimizer, device, num_e
                 "val":val_loader.state_dict(),
                 "num_epochs":num_epochs,
                 "global_step":global_step,
+                "step":0,
                 "run_id":run_id
             }, f"{save_dir}/model_{epoch+1}.chk")
-            print("Saved !!!")
+            pbar.write("Saved !!!")
 
         # Print a sample text after each epoch
         pbar.write(generate_and_print_sample(
