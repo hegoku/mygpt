@@ -99,6 +99,7 @@ class MultiHeadAttention(nn.Module):
 
         if LlamaMultiHeadAttention.mask is None:
             LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
+
         self.linear_bias = bias
         self.dropout = nn.Dropout(dropout)
 
@@ -146,6 +147,8 @@ class MultiHeadAttention(nn.Module):
 class LlamaMultiHeadAttention(nn.Module):
     freqs_cis = None
     mask = None
+    cos = None
+    sin = None
 
     def __init__(self, max_context:int, embedding_dim:int, head_num:int):
         super().__init__()
@@ -168,6 +171,9 @@ class LlamaMultiHeadAttention(nn.Module):
         if LlamaMultiHeadAttention.mask is None:
             LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
 
+        if LlamaMultiHeadAttention.cos is None:
+            LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin = precompute_rope_params(self.d_q, context_length=max_context)
+
     def forward(self, embedding_word):
         token_num = embedding_word.shape[-2]
         q = self.w_Q(embedding_word)
@@ -177,6 +183,9 @@ class LlamaMultiHeadAttention(nn.Module):
             LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
         if LlamaMultiHeadAttention.mask.device!=q.device:
             LlamaMultiHeadAttention.mask = LlamaMultiHeadAttention.mask.to(q.device)
+        if LlamaMultiHeadAttention.cos.device!=q.device:
+            LlamaMultiHeadAttention.cos = LlamaMultiHeadAttention.cos.to(q.device)
+            LlamaMultiHeadAttention.sin = LlamaMultiHeadAttention.sin.to(q.device)
 
         # We implicitly split the matrix by adding a `num_heads` dimension
         # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
@@ -194,7 +203,9 @@ class LlamaMultiHeadAttention(nn.Module):
         k = k.transpose(-3, -2)
         v = v.transpose(-3, -2)
 
-        q, k = apply_rotary_emb(q, k, freqs_cis=LlamaMultiHeadAttention.freqs_cis[:token_num,:])
+        # q, k = apply_rotary_emb(q, k, freqs_cis=LlamaMultiHeadAttention.freqs_cis[:token_num,:])
+        q = compute_rope(q, LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin)
+        k = compute_rope(k, LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin)
 
         scores = q @ k.transpose(-2, -1)
         scores.masked_fill_(LlamaMultiHeadAttention.mask.bool()[:token_num, :token_num], -torch.inf)
@@ -244,3 +255,48 @@ def apply_rotary_emb(
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(-2)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(-2)
     return xq_out.type_as(xq), xk_out.type_as(xk)
+
+def precompute_rope_params(head_dim, theta_base=10_000, context_length=4096):
+    assert head_dim % 2 == 0, "Embedding dimension must be even"
+
+    # Compute the inverse frequencies
+    inv_freq = 1.0 / (theta_base ** (torch.arange(0, head_dim, 2)[: (head_dim // 2)].float() / head_dim))
+
+    # Generate position indices
+    positions = torch.arange(context_length)
+
+    # Compute the angles
+    angles = positions[:, None] * inv_freq[None, :]  # Shape: (context_length, head_dim // 2)
+
+    # Expand angles to match the head_dim
+    angles = torch.cat([angles, angles], dim=1)  # Shape: (context_length, head_dim)
+    # Precompute sine and cosine
+    cos = torch.cos(angles)
+    sin = torch.sin(angles)
+
+    return cos, sin
+
+def compute_rope(x, cos, sin):
+    # x: (batch_size, num_heads, seq_len, head_dim)
+    # batch_size, num_heads, seq_len, head_dim = x.shape
+    seq_len = x.shape[-2]
+    head_dim = x.shape[-1]
+    assert head_dim % 2 == 0, "Head dimension must be even"
+
+    # Split x into first half and second half
+    x1 = x[..., : head_dim // 2]  # First half
+    x2 = x[..., head_dim // 2 :]  # Second half
+
+    # Adjust sin and cos shapes
+    if x.ndim==4:
+        cos = cos[:seq_len, :].unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, seq_len, head_dim)
+        sin = sin[:seq_len, :].unsqueeze(0).unsqueeze(0)
+    else:
+        cos = cos[:seq_len, :].unsqueeze(0)  # Shape: (1, seq_len, head_dim)
+        sin = sin[:seq_len, :].unsqueeze(0)
+
+    # Apply the rotary transformation
+    rotated = torch.cat((-x2, x1), dim=-1)
+    x_rotated = (x * cos) + (rotated * sin)
+
+    return x_rotated.to(dtype=x.dtype)
