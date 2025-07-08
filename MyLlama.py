@@ -2,18 +2,29 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import Attention
+import math
 
 class MyLlama(nn.Module):
-    def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, head_num:int):
+    def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, head_num:int, ff_dim:int):
         super().__init__()
         self.tokenizer = tokenizer
         self.embedding_dim = embedding_dim
         self.max_context = max_context
         self.head_num = head_num
         self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim, padding_idx=tokenizer.pad_token_id)
-        self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, head_num) for _ in range(layer)])
-        self.norm = nn.RMSNorm(embedding_dim)
+        self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, head_num, ff_dim) for _ in range(layer)])
+        self.norm = nn.RMSNorm(embedding_dim, eps=1e-5)
         self.output = nn.Linear(embedding_dim, tokenizer.len(), bias=False)
+        
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                fan_in = m.in_features
+                torch.nn.init.normal_(m.weight.data, mean=0.0, std=1.0/math.sqrt(fan_in))
+            elif isinstance(m, nn.Embedding):
+                torch.nn.init.normal_(m.weight.data, mean=0.0, std=1.0/math.sqrt(embedding_dim))
+                m.weight.data[tokenizer.pad_token_id].zero_()
+
+        self.output.weight = self.token_embedding.weight
 
     def forward(self, token_ids):
         embedding = self.token_embedding(token_ids)
@@ -23,13 +34,14 @@ class MyLlama(nn.Module):
         return embedding
 
 class TransformerBlock(nn.Module):
-    def __init__(self, max_context:int, embedding_dim:int, head_num:int):
+    def __init__(self, max_context:int, embedding_dim:int, head_num:int, ff_dim:int):
         super().__init__()
         self.head_num = head_num
-        self.norm1 = nn.RMSNorm(embedding_dim)
-        self.norm2 = nn.RMSNorm(embedding_dim)
+        self.norm1 = nn.RMSNorm(embedding_dim, eps=1e-5)
+        self.norm2 = nn.RMSNorm(embedding_dim, eps=1e-5)
         self.atten = Attention.LlamaMultiHeadAttention(max_context, embedding_dim, head_num)
-        self.ff = FeedForward(embedding_dim, 4*embedding_dim)
+        # self.ff = FeedForward(embedding_dim, 4*embedding_dim)
+        self.ff = FeedForward(embedding_dim, ff_dim)
 
     def forward(self, x):
         shortcut = x
