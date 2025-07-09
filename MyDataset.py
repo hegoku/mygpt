@@ -74,12 +74,14 @@ class MyDataset2(Dataset):
         return self.input_ids[idx], self.target_ids[idx]
 
 class MyDataset3(Dataset):
-    def __init__(self, txt, tokenizer, max_length, stride):
+    def __init__(self, txt, tokenizer, max_length, stride, format=None):
         self.input_ids = []
         self.target_ids = []
+        self.format = format
 
         i = 0
         # txt['text'] = txt['text'].replace("\n\n", tokenizer.eos_token+tokenizer.bos_token)
+        txt = txt.replace("\n", "")
         token_ids = tokenizer.encode(txt+tokenizer.eos_token)
         remaining_size = token_ids.shape[0]
         while remaining_size>0:
@@ -101,4 +103,7 @@ class MyDataset3(Dataset):
         return len(self.input_ids)
 
     def __getitem__(self, idx):
-        return self.input_ids[idx], self.target_ids[idx]
+        if self.format=="hg":
+            return {"input_ids":self.input_ids[idx], "labels":self.target_ids[idx]}
+        else:
+            return self.input_ids[idx], self.target_ids[idx]
