@@ -2,26 +2,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import Attention
+import math
 
 class MyGPT(nn.Module):
-    def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, d_q:int, d_v:int, head_num:int, dropout=0.0):
+    def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, head_num:int, dropout=0.0):
         super().__init__()
         self.tokenizer = tokenizer
         self.embedding_dim = embedding_dim
         self.max_context = max_context
-        self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim)
+        self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim, padding_idx=tokenizer.pad_token_id)
         self.drop_emb = nn.Dropout(dropout)
-        self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, d_q, d_v, head_num, dropout) for _ in range(layer)])
-        self.norm = nn.LayerNorm(embedding_dim)
-        self.output = nn.Linear(embedding_dim, tokenizer.len())
+        # self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, d_q, d_v, head_num, dropout) for _ in range(layer)])
+        self.transformer_layers = nn.ModuleList([TransformerBlock(max_context, embedding_dim, head_num) for _ in range(layer)])
+        self.norm = nn.LayerNorm(embedding_dim, eps=1e-5)
+        self.output = nn.Linear(embedding_dim, tokenizer.len(), bias=False)
         # self.p_embedding = nn.Embedding(self.max_context, self.embedding_dim)
 
-    def forward(self, token_ids):
+    #     self.apply(self.init_weights)
+    #     self.token_embedding.weight.data[tokenizer.pad_token_id].zero_()
+
+    #     self.output.weight = self.token_embedding.weight
+
+    # def init_weights(self, module):
+    #     """ Initialize the weights.
+    #     """
+    #     if isinstance(module, (nn.Linear, nn.Embedding)):
+    #         module.weight.data.normal_(mean=0.0, std=0.02)
+    #         if isinstance(module, (nn.Linear)) and module.bias is not None:
+    #             module.bias.data.zero_()
+
+    def forward(self, token_ids, padding_mask=None):
         embedding = self.token_embedding(token_ids)
         # embedding += self.p_embedding(torch.arange(token_ids.shape[-1], device=token_ids.device))
         # embedding += self.positionEmbedding(token_ids.shape[-1], self.embedding_dim, device=token_ids.device, dtype=embedding.dtype)
         embedding = self.drop_emb(embedding)
-        embedding = self.transformer_layers(embedding)
+        for layer in self.transformer_layers:
+            embedding = layer(embedding, padding_mask)
+        # embedding = self.transformer_layers(embedding)
         embedding = self.norm(embedding)
         embedding = self.output(embedding)
         return embedding
@@ -41,18 +58,20 @@ class MyGPT(nn.Module):
         return res
 
 class TransformerBlock(nn.Module):
-    def __init__(self, max_context:int, embedding_dim:int, d_q:int, d_v:int, head_num:int, dropout=0.0):
+    def __init__(self, max_context:int, embedding_dim:int, head_num:int, dropout=0.0):
         super().__init__()
-        self.norm1 = nn.LayerNorm(embedding_dim)
-        self.norm2 = nn.LayerNorm(embedding_dim)
-        self.atten = Attention.MultiHeadAttentionWrapper(max_context, embedding_dim, d_q, d_v, head_num, dropout)
+        self.head_num = head_num
+        self.norm1 = nn.LayerNorm(embedding_dim, eps=1e-5)
+        self.norm2 = nn.LayerNorm(embedding_dim, eps=1e-5)
+        # self.atten = Attention.MultiHeadAttentionWrapper(max_context, embedding_dim, d_q, d_v, head_num, dropout)
+        self.atten = Attention.MultiHeadAttention(max_context, embedding_dim, head_num, dropout)
         self.drop_shortcut = nn.Dropout(dropout)
         self.ff = FeedForward(embedding_dim, 4*embedding_dim)
 
-    def forward(self, x):
+    def forward(self, x, padding_mask=None):
         shortcut = x
         x = self.norm1(x)
-        x = self.atten(x)
+        x = self.atten(x, padding_mask)
         x = self.drop_shortcut(x)
         x = x + shortcut
 

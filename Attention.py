@@ -80,6 +80,8 @@ class MultiHeadAttentionWrapper(nn.Module):
 class MultiHeadAttention(nn.Module):
     freqs_cis = None
     mask = None
+    cos = None
+    sin = None
 
     def __init__(self, max_context:int, embedding_dim:int, head_num:int, dropout=0.0, bias=False):
         super().__init__()
@@ -94,24 +96,29 @@ class MultiHeadAttention(nn.Module):
         self.w_K = nn.Linear(embedding_dim, embedding_dim, bias=bias)
         self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=bias)
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=bias)
-        if LlamaMultiHeadAttention.freqs_cis is None:
-            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
+        # if MultiHeadAttention.freqs_cis is None:
+            # MultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
 
-        if LlamaMultiHeadAttention.mask is None:
-            LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
+        if MultiHeadAttention.mask is None:
+            MultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
+
+        if MultiHeadAttention.cos is None:
+            MultiHeadAttention.cos, MultiHeadAttention.sin = precompute_rope_params(self.d_q, context_length=max_context)
 
         self.linear_bias = bias
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, embedding_word):
+    def forward(self, embedding_word, padding_mask=None):
         token_num = embedding_word.shape[-2]
         q = self.w_Q(embedding_word)
         k = self.w_K(embedding_word)
         v = self.w_V(embedding_word)
-        if LlamaMultiHeadAttention.freqs_cis.device!=q.device:
-            LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
-        if LlamaMultiHeadAttention.mask.device!=q.device:
-            LlamaMultiHeadAttention.mask = LlamaMultiHeadAttention.mask.to(q.device)
+        # if MultiHeadAttention.freqs_cis.device!=q.device:
+            # MultiHeadAttention.freqs_cis = MultiHeadAttention.freqs_cis.to(q.device)
+        if MultiHeadAttention.mask.device!=q.device:
+            MultiHeadAttention.mask = MultiHeadAttention.mask.to(q.device)
+            MultiHeadAttention.cos = MultiHeadAttention.cos.to(q.device)
+            MultiHeadAttention.sin = MultiHeadAttention.sin.to(q.device)
 
         # We implicitly split the matrix by adding a `num_heads` dimension
         # Unroll last dim: (b, num_tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
@@ -129,10 +136,17 @@ class MultiHeadAttention(nn.Module):
         k = k.transpose(-3, -2)
         v = v.transpose(-3, -2)
 
-        q, k = apply_rotary_emb(q, k, freqs_cis=LlamaMultiHeadAttention.freqs_cis[:token_num,:])
+        # q, k = apply_rotary_emb(q, k, freqs_cis=MultiHeadAttention.freqs_cis[:token_num,:])
+
+        q = compute_rope(q, MultiHeadAttention.cos, MultiHeadAttention.sin)
+        k = compute_rope(k, MultiHeadAttention.cos, MultiHeadAttention.sin)
+
+        mask = MultiHeadAttention.mask.bool()[:token_num, :token_num]
+        if padding_mask is not None:
+            mask = mask | padding_mask
 
         scores = q @ k.transpose(-2, -1)
-        scores.masked_fill_(LlamaMultiHeadAttention.mask.bool()[:token_num, :token_num], -torch.inf)
+        scores.masked_fill_(mask, -torch.inf)
         weights = torch.softmax(scores / self.softmax_factor, dim=-1)
         weights = self.dropout(weights)
 
@@ -174,7 +188,7 @@ class LlamaMultiHeadAttention(nn.Module):
         if LlamaMultiHeadAttention.cos is None:
             LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin = precompute_rope_params(self.d_q, context_length=max_context)
 
-    def forward(self, embedding_word):
+    def forward(self, embedding_word, padding_mask=None):
         token_num = embedding_word.shape[-2]
         q = self.w_Q(embedding_word)
         k = self.w_K(embedding_word)
@@ -207,12 +221,20 @@ class LlamaMultiHeadAttention(nn.Module):
         q = compute_rope(q, LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin)
         k = compute_rope(k, LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin)
 
+        mask = LlamaMultiHeadAttention.mask.bool()[:token_num, :token_num]
+        if padding_mask is not None:
+            mask = mask | padding_mask
+
         scores = q @ k.transpose(-2, -1)
-        scores.masked_fill_(LlamaMultiHeadAttention.mask.bool()[:token_num, :token_num], -torch.inf)
+        scores.masked_fill_(mask, -torch.inf)
         weights = torch.softmax(scores / self.softmax_factor, dim=-1)
 
         # Shape: (b, num_tokens, num_heads, head_dim)
         output = (weights @ v).transpose(-3, -2)
+
+        # output = nn.functional.scaled_dot_product_attention(
+            # q, k, v, attn_mask=None, dropout_p=0, is_causal=True)
+        # output = output.transpose(-3, -2)
 
         # Combine heads, where self.embedding_size = self.head_num * self.d_q
         output = output.reshape(*output.shape[:-2], self.embedding_size)
