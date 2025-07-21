@@ -8,6 +8,11 @@ import DeepseekTokenizer
 import MyDataset
 import torch
 from transformers import TrainerCallback
+import os
+from datasets import load_from_disk
+from torch.utils.data import Dataset, DataLoader
+
+os.environ["WANDB_PROJECT"] = 'mygpt'
 
 class MyModelConfig(PretrainedConfig):
     model_type = "mymodel"  # 唯一标识名
@@ -34,8 +39,8 @@ class MyModel(PreTrainedModel):
         self.norm = nn.LayerNorm(config.embedding_dim, eps=1e-5)
         self.output = nn.Linear(config.embedding_dim, config.vocab_size, bias=False)
 
-    def forward(self, input_ids, labels=None, **kwargs):
-        embedding = self.token_embedding(input_ids)
+    def forward(self, input, target=None, **kwargs):
+        embedding = self.token_embedding(input)
         embedding = self.drop_emb(embedding)
         for layer in self.transformer_layers:
             embedding = layer(embedding)
@@ -43,28 +48,40 @@ class MyModel(PreTrainedModel):
         embedding = self.output(embedding)
         
         loss = None
-        if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(embedding.view(-1, self.config.vocab_size), 
-                            labels.view(-1))
+        if target is not None:
+            loss = torch.nn.functional.cross_entropy(embedding.flatten(0, 1), target.flatten(), ignore_index=self.config.pad_token_id)
+            # loss_fct = nn.CrossEntropyLoss()
+            # loss = loss_fct(embedding.view(-1, self.config.vocab_size), 
+                            # target.view(-1))
         return {"loss": loss, "logits": embedding}
 
 
 training_args = TrainingArguments(
-    output_dir="./results",
-    num_train_epochs=100,
-    per_device_train_batch_size=4,
+    output_dir="./results2",
+    num_train_epochs=8,
+    per_device_train_batch_size=5,
+    ignore_data_skip=True,
     # per_device_eval_batch_size=2,
+    gradient_accumulation_steps=20,
     eval_strategy="no",
     learning_rate=0.0004,
     logging_dir="./logs",
-    logging_steps=10,
-    save_steps=10,
-    report_to="none",
-    # weight_decay=0.1,
-    # adam_beta2=0.98,
-    seed=123,
-    # lr_scheduler_type="cos"
+    logging_steps=100,
+    save_steps=5000,
+    save_strategy="steps",
+    save_total_limit=5,
+    report_to="wandb",
+    weight_decay=0.1,
+    adam_beta2=0.95,
+    # seed=123,
+    warmup_ratio=0.01,
+    lr_scheduler_type="cosine",
+    run_name="test",
+    optim="adamw_bnb_8bit",
+    dataloader_pin_memory=False,
+    torch_compile=True,
+    label_names=['target'],
+    resume_from_checkpoint=True
 )
 
 if torch.cuda.is_available():
@@ -83,18 +100,13 @@ model = MyModel(config).to(device, dtype=torch.bfloat16)
 
 torch.manual_seed(123)
 
-file_path = 'train_data.txt'
-
-text_data = ''
-with open(file_path, "r", encoding="utf-8") as file:
-	text_data = file.read()
-
-train_ratio = 0.80
-split_idx = int(train_ratio * len(text_data))
-train_data = text_data[:split_idx]
-val_data = text_data[split_idx:]
-
-train_loader = MyDataset.MyDataset3(train_data, tokenizer, 1024, 1024, format="hg")
+train_dataset = load_from_disk('./fineweb')
+# train_dataset = train_dataset.to_iterable_dataset()
+# train_dataset = train_dataset.shuffle(123, buffer_size=100)
+# train_dataset = train_dataset.batch(batch_size=16)
+train_dataset = train_dataset.with_format("torch")
+# train_loader = StatefulDataLoader(train_dataset, batch_size=8, shuffle=True, drop_last=False)
+print("train data loaded")
 
 def generate_text(model, idx, max_tokens:int, max_context:int):
     for _ in range(max_tokens):
@@ -134,15 +146,15 @@ class LossLoggingCallback(TrainerCallback):
         # 每个epoch结束时打印
         # print(f"\nEpoch {state.epoch} finished | "
             #   f"Average Loss: {state.log_history[-1]['loss']:.4f}")
-        
+
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=train_loader,
+    train_dataset=train_dataset,
     # eval_dataset=tokenized_dataset["validation"],
-    callbacks=[LossLoggingCallback()]
+    callbacks=[LossLoggingCallback()],
 )
 
-trainer.train()  # 开始训练！
+trainer.train(resume_from_checkpoint="./results2/checkpoint-290000")  # 开始训练！
 
 print(generate_and_print_sample(model, tokenizer, device, "数学家希望"))
