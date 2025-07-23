@@ -78,6 +78,7 @@ class MyDataset3(Dataset):
         self.input_ids = []
         self.target_ids = []
         self.format = format
+        self.tokenizer = tokenizer
 
         i = 0
         # txt['text'] = txt['text'].replace("\n\n", tokenizer.eos_token+tokenizer.bos_token)
@@ -87,23 +88,27 @@ class MyDataset3(Dataset):
         while remaining_size>0:
             if (remaining_size<=max_length):
                 input_chunk = token_ids[i:]
-                target_chunk = token_ids[i + 1: ]
-                tmp = torch.full([max_length-input_chunk.shape[0]], tokenizer.pad_token_id)
+                # target_chunk = token_ids[i + 1: ]
+                tmp = torch.full([max_length+1-input_chunk.shape[0]], tokenizer.pad_token_id)
                 input_chunk = torch.cat((input_chunk, tmp))
-                tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.pad_token_id)
-                target_chunk = torch.cat((target_chunk, tmp))
+                # tmp = torch.full([max_length-target_chunk.shape[0]], tokenizer.pad_token_id)
+                # target_chunk = torch.cat((target_chunk, tmp))
             else:
-                input_chunk = token_ids[i:i + max_length]
+                input_chunk = token_ids[i:i + max_length+1]
                 target_chunk = token_ids[i + 1: i + max_length + 1]
             self.input_ids.append(input_chunk.detach().clone())
-            self.target_ids.append(target_chunk.detach().clone())
+            # self.target_ids.append(target_chunk.detach().clone())
             i = i+stride
             remaining_size = remaining_size -stride
     def __len__(self):
         return len(self.input_ids)
 
     def __getitem__(self, idx):
+        # if self.format=="hg":
+        #     return {"input_ids":self.input_ids[idx], "labels":self.target_ids[idx]}
+        # else:
+        #     return self.input_ids[idx], self.target_ids[idx]
         if self.format=="hg":
-            return {"input_ids":self.input_ids[idx], "labels":self.target_ids[idx]}
+            return {"input_ids":self.input_ids[idx][:-1], "labels":self.input_ids[idx][1:]}
         else:
-            return self.input_ids[idx], self.target_ids[idx]
+            return self.input_ids[idx][:-1], self.input_ids[idx][1:]
