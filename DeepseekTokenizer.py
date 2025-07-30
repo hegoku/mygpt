@@ -2,13 +2,17 @@ from transformers import AutoTokenizer
 
 class DeepseekTokenizer():
     def __init__(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("deepseek_tokenizer")
+        # self.tokenizer = AutoTokenizer.from_pretrained("deepseek_tokenizer")
+        self.tokenizer = AutoTokenizer.from_pretrained("FlagAlpha/Atom-7B", use_fast=False)
         self.bos_token_id = self.tokenizer.bos_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
         self.bos_token = self.tokenizer.bos_token
         self.eos_token = self.tokenizer.eos_token
-        self.pad_token_id = 2
-        self.pad_token = '<｜▁pad▁｜>'
+        # self.pad_token_id = 2
+        # self.pad_token = '<｜▁pad▁｜>'
+        self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
+        self.pad_token_id = self.tokenizer.pad_token_id
+        self.pad_token = self.tokenizer.pad_token
 
     def encode(self, text:str, max_length=None, padding=False, add_special_tokens=False):
         return self.tokenizer.encode(text, padding_side='right', return_tensors='pt', max_length=max_length, padding=padding, add_special_tokens=add_special_tokens)[0]
