@@ -3,7 +3,7 @@ from transformers import AutoTokenizer
 class DeepseekTokenizer():
     def __init__(self):
         # self.tokenizer = AutoTokenizer.from_pretrained("deepseek_tokenizer")
-        self.tokenizer = AutoTokenizer.from_pretrained("FlagAlpha/Atom-7B", use_fast=False)
+        self.tokenizer = AutoTokenizer.from_pretrained("Atom-7B_tokenizer", use_fast=False)
         self.bos_token_id = self.tokenizer.bos_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
         self.bos_token = self.tokenizer.bos_token
