@@ -41,3 +41,15 @@ class MyGPTPretrainedModel(PreTrainedModel):
         if target is not None:
             loss = torch.nn.functional.cross_entropy(embedding.flatten(0, 1), target.flatten(), ignore_index=self.config.pad_token_id)
         return {"loss": loss, "logits": embedding}
+
+def generate_text(model, idx, max_tokens:int, max_context:int):
+    for _ in range(max_tokens):
+        idx_cond = idx[-max_context:]
+        with torch.no_grad():
+            logits = model(idx_cond)['logits']
+
+        logits = logits[-1, :]
+        probas = torch.softmax(logits, dim=-1)
+        idx_next = torch.argmax(probas, dim=-1, keepdim=True)
+        idx = torch.cat((idx, idx_next), dim=0)
+    return idx
