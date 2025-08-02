@@ -13,6 +13,8 @@ class DeepseekTokenizer():
         self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
         self.pad_token_id = self.tokenizer.pad_token_id
         self.pad_token = self.tokenizer.pad_token
+        self.unk_token = self.tokenizer.unk_token
+        self.unk_token_id = self.tokenizer.unk_token_id
 
     def encode(self, text:str, max_length=None, padding=False, add_special_tokens=False):
         return self.tokenizer.encode(text, padding_side='right', return_tensors='pt', max_length=max_length, padding=padding, add_special_tokens=add_special_tokens)[0]
