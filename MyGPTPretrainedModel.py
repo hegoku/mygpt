@@ -54,7 +54,7 @@ class MyGPTPretrainedModel(PreTrainedModel):
             loss = torch.nn.functional.cross_entropy(embedding.flatten(0, 1), labels.flatten(), ignore_index=self.config.pad_token_id)
         return {"loss": loss, "logits": embedding}
 
-def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, top_k=None, eos_id=None):
+def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, top_k=None, top_p=None, eos_id=None):
     for _ in range(max_tokens):
         idx_cond = idx[-max_context:]
         with torch.no_grad():
@@ -66,6 +66,21 @@ def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, 
             top_logits, _ = torch.topk(logits, top_k)
             min_val = top_logits[-1]
             logits = torch.where(logits < min_val, torch.tensor(float("-inf")).to(logits.device), logits)
+
+        # Apply top_p (nucleus) filtering
+        if top_p is not None and top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            probs = torch.softmax(sorted_logits, dim=-1)
+            cumulative_probs = torch.cumsum(probs, dim=-1)
+
+            # Create mask for tokens to remove
+            sorted_mask = cumulative_probs > top_p
+            # Ensure at least one token is kept
+            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+            sorted_mask[..., 0] = False
+
+            # Set logits of removed tokens to -inf
+            logits[sorted_indices[sorted_mask]] = float('-inf')
 
         if temperature > 0.0:
             logits = logits / temperature
