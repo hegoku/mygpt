@@ -18,18 +18,18 @@ class MyGPT(nn.Module):
         self.output = nn.Linear(embedding_dim, tokenizer.len(), bias=False)
         # self.p_embedding = nn.Embedding(self.max_context, self.embedding_dim)
 
-    #     self.apply(self.init_weights)
-    #     self.token_embedding.weight.data[tokenizer.pad_token_id].zero_()
+        self.apply(self.init_weights)
+        # self.token_embedding.weight.data[tokenizer.pad_token_id].zero_()
 
-    #     self.output.weight = self.token_embedding.weight
+        self.output.weight = self.token_embedding.weight
 
-    # def init_weights(self, module):
-    #     """ Initialize the weights.
-    #     """
-    #     if isinstance(module, (nn.Linear, nn.Embedding)):
-    #         module.weight.data.normal_(mean=0.0, std=0.02)
-    #         if isinstance(module, (nn.Linear)) and module.bias is not None:
-    #             module.bias.data.zero_()
+    def init_weights(self, module):
+        """ Initialize the weights.
+        """
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, (nn.Linear)) and module.bias is not None:
+                module.bias.data.zero_()
 
     def forward(self, token_ids, padding_mask=None):
         embedding = self.token_embedding(token_ids)

@@ -1,9 +1,10 @@
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import PreTrainedModel, PretrainedConfig, GenerationMixin
 import MyGPT
 import torch.nn as nn
 import torch.nn.functional as F
 import DeepseekTokenizer
 import torch
+from transformers.modeling_outputs import CausalLMOutputWithPast
 
 class MyGPTPretrainedModelConfig(PretrainedConfig):
     model_type = "mygpt2"  # 唯一标识名
@@ -17,7 +18,7 @@ class MyGPTPretrainedModelConfig(PretrainedConfig):
         self.dropout = dropout
         self.max_context = max_context
 
-class MyGPTPretrainedModel(PreTrainedModel):
+class MyGPTPretrainedModel(PreTrainedModel, GenerationMixin):
     config_class = MyGPTPretrainedModelConfig  # 关联配置
 
     def __init__(self, config):
@@ -40,7 +41,13 @@ class MyGPTPretrainedModel(PreTrainedModel):
             if isinstance(module, (nn.Linear)) and module.bias is not None:
                 module.bias.data.zero_()
 
-    def forward(self, input_ids, labels=None, **kwargs):
+    def get_input_embeddings(self):
+        return self.token_embedding
+
+    def set_input_embeddings(self, new_embeddings):
+        self.token_embedding = new_embeddings
+
+    def forward(self, input_ids, past_key_values=None, use_cache=None, labels=None, **kwargs):
         embedding = self.token_embedding(input_ids)
         embedding = self.drop_emb(embedding)
         for layer in self.transformer_layers:
@@ -52,15 +59,27 @@ class MyGPTPretrainedModel(PreTrainedModel):
         loss = None
         if labels is not None:
             loss = torch.nn.functional.cross_entropy(embedding.flatten(0, 1), labels.flatten(), ignore_index=self.config.pad_token_id)
-        return {"loss": loss, "logits": embedding}
+        return CausalLMOutputWithPast(loss=loss, logits=embedding, past_key_values=None)
 
-def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, top_k=None, top_p=None, eos_id=None):
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        return {
+            "input_ids": input_ids,
+            "attention_mask": kwargs.get("attention_mask")
+        }
+
+def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, top_k=None, top_p=None, repetition_penalty=1.0, eos_id=None, tokenizer=None):
     for _ in range(max_tokens):
         idx_cond = idx[-max_context:]
         with torch.no_grad():
             logits = model(idx_cond)['logits']
 
         logits = logits[-1, :]
+
+        # ✅ 重复性惩罚
+        if repetition_penalty != 1.0:
+            seen_tokens = set(idx.tolist())
+            for token_id in seen_tokens:
+                logits[token_id] /= repetition_penalty
 
         if top_k is not None:
             top_logits, _ = torch.topk(logits, top_k)
@@ -95,5 +114,9 @@ def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, 
 
         if idx_next == eos_id:
             break
+
+        if tokenizer is not None:
+            print(tokenizer.decode(idx_next, errors="ignore"), end='', flush=True)
+
         idx = torch.cat((idx, idx_next), dim=0)
     return idx
