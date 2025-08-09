@@ -1,0 +1,119 @@
+from transformers import PreTrainedModel, PretrainedConfig, GenerationMixin
+import MyLlama
+import torch.nn as nn
+import torch.nn.functional as F
+import torch
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
+class MyLlamaPretrainedModelConfig(PretrainedConfig):
+    model_type = "myllama2"  # 唯一标识名
+    def __init__(self, vocab_size=50000, max_context=1024, embedding_dim=768, layers=12, head_num=12, ff_dim=2048, pad_token_id=-100, **kwargs):
+        super().__init__(**kwargs)
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.pad_token_id = pad_token_id
+        self.layers = layers
+        self.head_num = head_num
+        self.ff_dim = ff_dim
+        self.max_context = max_context
+
+class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
+    config_class = MyLlamaPretrainedModelConfig  # 关联配置
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.embedding_dim = config.embedding_dim
+        self.max_context = config.max_context
+        self.token_embedding = nn.Embedding(config.vocab_size, config.embedding_dim, padding_idx=config.pad_token_id)
+        self.transformer_layers = nn.ModuleList([MyLlama.TransformerBlock(config.max_context, config.embedding_dim, config.head_num, config.ff_dim) for _ in range(config.layers)])
+        self.norm = nn.RMSNorm(config.embedding_dim, eps=1e-5)
+        # self.output = nn.Linear(config.embedding_dim, config.vocab_size, bias=False)
+
+        self.post_init()
+
+    def _init_weights(self, module):
+        """ Initialize the weights.
+        """
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, (nn.Linear)) and module.bias is not None:
+                module.bias.data.zero_()
+
+    def get_input_embeddings(self):
+        return self.token_embedding
+
+    def set_input_embeddings(self, new_embeddings):
+        self.token_embedding = new_embeddings
+
+    def forward(self, input_ids, past_key_values=None, use_cache=None, labels=None, **kwargs):
+        embedding = self.token_embedding(input_ids)
+        for layer in self.transformer_layers:
+            embedding = layer(embedding)
+        embedding = self.norm(embedding)
+        # embedding = self.output(embedding)
+        embedding = F.linear(embedding, self.token_embedding.weight)
+        
+        loss = None
+        if labels is not None:
+            loss = torch.nn.functional.cross_entropy(embedding.flatten(0, 1), labels.flatten(), ignore_index=self.config.pad_token_id)
+        return CausalLMOutputWithPast(loss=loss, logits=embedding, past_key_values=None)
+
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        return {
+            "input_ids": input_ids,
+            "attention_mask": kwargs.get("attention_mask")
+        }
+
+def generate_text(model, idx, max_tokens:int, max_context:int, temperature=0.0, top_k=None, top_p=None, repetition_penalty=1.0, eos_id=None, tokenizer=None):
+    for _ in range(max_tokens):
+        idx_cond = idx[-max_context:]
+        with torch.no_grad():
+            logits = model(idx_cond)['logits']
+
+        logits = logits[-1, :]
+
+        # ✅ 重复性惩罚
+        if repetition_penalty != 1.0:
+            seen_tokens = set(idx.tolist())
+            for token_id in seen_tokens:
+                logits[token_id] /= repetition_penalty
+
+        if top_k is not None:
+            top_logits, _ = torch.topk(logits, top_k)
+            min_val = top_logits[-1]
+            logits = torch.where(logits < min_val, torch.tensor(float("-inf")).to(logits.device), logits)
+
+        # Apply top_p (nucleus) filtering
+        if top_p is not None and top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            probs = torch.softmax(sorted_logits, dim=-1)
+            cumulative_probs = torch.cumsum(probs, dim=-1)
+
+            # Create mask for tokens to remove
+            sorted_mask = cumulative_probs > top_p
+            # Ensure at least one token is kept
+            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+            sorted_mask[..., 0] = False
+
+            # Set logits of removed tokens to -inf
+            logits[sorted_indices[sorted_mask]] = float('-inf')
+
+        if temperature > 0.0:
+            logits = logits / temperature
+
+            # Apply softmax to get probabilities
+            probs = torch.softmax(logits, dim=-1)  # (batch_size, context_len)
+
+            # Sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (batch_size, 1)
+        else:
+            idx_next = torch.argmax(logits, dim=-1, keepdim=True)
+
+        if idx_next == eos_id:
+            break
+
+        if tokenizer is not None:
+            print(tokenizer.decode(idx_next, errors="ignore"), end='', flush=True)
+
+        idx = torch.cat((idx, idx_next), dim=0)
+    return idx
