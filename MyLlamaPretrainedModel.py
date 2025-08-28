@@ -7,7 +7,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 class MyLlamaPretrainedModelConfig(PretrainedConfig):
     model_type = "myllama2"  # 唯一标识名
-    def __init__(self, vocab_size=50000, max_context=1024, embedding_dim=768, layers=12, head_num=12, ff_dim=2048, pad_token_id=-100, **kwargs):
+    def __init__(self, vocab_size=50000, max_context=1024, embedding_dim=768, layers=12, head_num=12, ff_dim=2048, pad_token_id=-100, rope_theta:float=10000.0, **kwargs):
         super().__init__(**kwargs)
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
@@ -16,6 +16,7 @@ class MyLlamaPretrainedModelConfig(PretrainedConfig):
         self.head_num = head_num
         self.ff_dim = ff_dim
         self.max_context = max_context
+        self.rope_theta = rope_theta
 
 class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
     config_class = MyLlamaPretrainedModelConfig  # 关联配置
@@ -25,8 +26,8 @@ class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
         self.embedding_dim = config.embedding_dim
         self.max_context = config.max_context
         self.token_embedding = nn.Embedding(config.vocab_size, config.embedding_dim, padding_idx=config.pad_token_id)
-        self.transformer_layers = nn.ModuleList([MyLlama.TransformerBlock(config.max_context, config.embedding_dim, config.head_num, config.ff_dim) for _ in range(config.layers)])
-        self.norm = nn.RMSNorm(config.embedding_dim, eps=1e-5)
+        self.transformer_layers = nn.ModuleList([MyLlama.TransformerBlock(config.max_context, config.embedding_dim, config.head_num, config.ff_dim, config.rope_theta) for _ in range(config.layers)])
+        self.norm = nn.RMSNorm(config.embedding_dim, eps=1e-6)
         # self.output = nn.Linear(config.embedding_dim, config.vocab_size, bias=False)
 
         self.post_init()

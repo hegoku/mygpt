@@ -5,7 +5,7 @@ import Attention
 import math
 
 class MyLlama(nn.Module):
-    def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, head_num:int, ff_dim:int):
+    def __init__(self, tokenizer, layer:int, max_context:int, embedding_dim:int, head_num:int, ff_dim:int, rope_theta:float=10000.0):
         super().__init__()
         self.tokenizer = tokenizer
         self.embedding_dim = embedding_dim
@@ -13,8 +13,8 @@ class MyLlama(nn.Module):
         self.head_num = head_num
         self.token_embedding = nn.Embedding(tokenizer.len(), embedding_dim, padding_idx=tokenizer.pad_token_id)
         # self.transformer_layers = nn.Sequential(*[TransformerBlock(max_context, embedding_dim, head_num, ff_dim) for _ in range(layer)])
-        self.transformer_layers = nn.ModuleList([TransformerBlock(max_context, embedding_dim, head_num, ff_dim) for _ in range(layer)])
-        self.norm = nn.RMSNorm(embedding_dim, eps=1e-5)
+        self.transformer_layers = nn.ModuleList([TransformerBlock(max_context, embedding_dim, head_num, ff_dim, rope_theta) for _ in range(layer)])
+        self.norm = nn.RMSNorm(embedding_dim, eps=1e-6)
         self.output = nn.Linear(embedding_dim, tokenizer.len(), bias=False)
         
         # for m in self.modules():
@@ -39,12 +39,12 @@ class MyLlama(nn.Module):
         return embedding
 
 class TransformerBlock(nn.Module):
-    def __init__(self, max_context:int, embedding_dim:int, head_num:int, ff_dim:int):
+    def __init__(self, max_context:int, embedding_dim:int, head_num:int, ff_dim:int, rope_theta:float=10000.0):
         super().__init__()
         self.head_num = head_num
-        self.norm1 = nn.RMSNorm(embedding_dim, eps=1e-5)
-        self.norm2 = nn.RMSNorm(embedding_dim, eps=1e-5)
-        self.atten = Attention.LlamaMultiHeadAttention(max_context, embedding_dim, head_num)
+        self.norm1 = nn.RMSNorm(embedding_dim, eps=1e-6)
+        self.norm2 = nn.RMSNorm(embedding_dim, eps=1e-6)
+        self.atten = Attention.LlamaMultiHeadAttention(max_context, embedding_dim, head_num, rope_theta=rope_theta)
         # self.ff = FeedForward(embedding_dim, 4*embedding_dim)
         self.ff = FeedForward(embedding_dim, ff_dim)
 
