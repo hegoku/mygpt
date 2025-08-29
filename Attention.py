@@ -164,7 +164,7 @@ class LlamaMultiHeadAttention(nn.Module):
     cos = None
     sin = None
 
-    def __init__(self, max_context:int, embedding_dim:int, head_num:int):
+    def __init__(self, max_context:int, embedding_dim:int, head_num:int, rope_theta:float=10000.0):
         super().__init__()
         assert embedding_dim % head_num == 0, "embedding_dim must be divisible by head_num"
         self.max_context = max_context
@@ -180,7 +180,7 @@ class LlamaMultiHeadAttention(nn.Module):
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=False)
         # self.register_buffer("mask", torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1))
         if LlamaMultiHeadAttention.freqs_cis is None:
-            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context)
+            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context, theta=rope_theta)
 
         if LlamaMultiHeadAttention.mask is None:
             LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
