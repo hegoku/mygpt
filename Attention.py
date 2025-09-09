@@ -179,25 +179,24 @@ class LlamaMultiHeadAttention(nn.Module):
         self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=False)
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=False)
         # self.register_buffer("mask", torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1))
-        if LlamaMultiHeadAttention.freqs_cis is None:
-            LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context, theta=rope_theta)
+        # if LlamaMultiHeadAttention.freqs_cis is None:
+            # LlamaMultiHeadAttention.freqs_cis = precompute_freqs_cis(self.d_q, max_context, theta=rope_theta)
 
         if LlamaMultiHeadAttention.mask is None:
             LlamaMultiHeadAttention.mask = torch.triu(torch.ones(self.max_context, self.max_context), diagonal=1)
 
         if LlamaMultiHeadAttention.cos is None:
-            LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin = precompute_rope_params(self.d_q, context_length=max_context)
+            LlamaMultiHeadAttention.cos, LlamaMultiHeadAttention.sin = precompute_rope_params(self.d_q, context_length=max_context, theta_base=rope_theta)
 
     def forward(self, embedding_word, padding_mask=None):
         token_num = embedding_word.shape[-2]
         q = self.w_Q(embedding_word)
         k = self.w_K(embedding_word)
         v = self.w_V(embedding_word)
-        if LlamaMultiHeadAttention.freqs_cis.device!=q.device:
-            LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
+        # if LlamaMultiHeadAttention.freqs_cis.device!=q.device:
+            # LlamaMultiHeadAttention.freqs_cis = LlamaMultiHeadAttention.freqs_cis.to(q.device)
         if LlamaMultiHeadAttention.mask.device!=q.device:
             LlamaMultiHeadAttention.mask = LlamaMultiHeadAttention.mask.to(q.device)
-        if LlamaMultiHeadAttention.cos.device!=q.device:
             LlamaMultiHeadAttention.cos = LlamaMultiHeadAttention.cos.to(q.device)
             LlamaMultiHeadAttention.sin = LlamaMultiHeadAttention.sin.to(q.device)
 
