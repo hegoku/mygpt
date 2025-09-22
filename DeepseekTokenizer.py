@@ -4,6 +4,9 @@ class DeepseekTokenizer():
     def __init__(self):
         # self.tokenizer = AutoTokenizer.from_pretrained("deepseek_tokenizer")
         self.tokenizer = AutoTokenizer.from_pretrained("Atom-7B_tokenizer", use_fast=False)
+        # self.tokenizer = AutoTokenizer.from_pretrained("LinkSoul/Chinese-Llama-2-7b", use_fast=False)
+        # self.tokenizer.add_special_tokens({"bos_token": "<|startoftext|>"})
+        # self.tokenizer.add_special_tokens({"eos_token": "<|endoftext|>"})
         self.bos_token_id = self.tokenizer.bos_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
         self.bos_token = self.tokenizer.bos_token
@@ -16,6 +19,8 @@ class DeepseekTokenizer():
         self.unk_token = self.tokenizer.unk_token
         self.unk_token_id = self.tokenizer.unk_token_id
 
+        self.tokenizer.add_special_tokens({"additional_special_tokens": ["<|user|>", "<|system|>", "<|assistant|>", "<|tool|>"]})
+
     def encode(self, text:str, max_length=None, padding=False, add_special_tokens=False):
         return self.tokenizer.encode(text, padding_side='right', return_tensors='pt', max_length=max_length, padding=padding, add_special_tokens=add_special_tokens)[0]
 
@@ -24,3 +29,6 @@ class DeepseekTokenizer():
     
     def len(self):
         return len(self.tokenizer)
+
+    def all_special_tokens(self):
+        return self.tokenizer.all_special_tokens
