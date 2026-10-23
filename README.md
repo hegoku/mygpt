@@ -69,3 +69,65 @@ Override specific fields from the CLI (CLI arguments take precedence over `confi
 ```bash
 python g_data_v2.py --config config.json --block_size 512 --split validation
 ```
+
+---
+
+# Model Evaluation (`eval.py`)
+
+`eval.py` loads a trained `MyLlamaPretrainedModel` checkpoint and a pre-tokenized Arrow validation dataset from disk, computes the token-weighted average Cross-Entropy validation loss and perplexity (`exp(loss)`), and prints the results.
+
+## Arguments
+
+| Argument | Type | Required | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `--config` | `str` | No | `None` | Path to a JSON configuration file. CLI arguments override values in the config file. |
+| `--dataset_path` | `str` | Yes* | `None` | Local directory path to the processed validation dataset (saved via `save_to_disk`). |
+| `--checkpoint` | `str` | Yes* | `None` | Path to the model checkpoint directory (loaded via `from_pretrained`). |
+| `--batch_size` | `int` | No | `8` | Batch size used during evaluation. |
+
+*\*`--dataset_path` and `--checkpoint` must be provided either via CLI or inside the `--config` JSON file.*
+
+## Usage Examples
+
+### 1. Command-Line Arguments
+
+Basic usage with default batch size (`batch_size=8`):
+
+```bash
+python eval.py \
+  --dataset_path /Volumes/TinyStories_val \
+  --checkpoint ./results/checkpoint-5000
+```
+
+Specifying custom batch size:
+
+```bash
+python eval.py \
+  --dataset_path /Volumes/TinyStories_val \
+  --checkpoint ./results/checkpoint-5000 \
+  --batch_size 16
+```
+
+### 2. Using a JSON Configuration File
+
+Create an `eval_config.json` file:
+
+```json
+{
+  "dataset_path": "/Volumes/TinyStories_val",
+  "checkpoint": "./results/checkpoint-5000",
+  "batch_size": 8
+}
+```
+
+Run with the config file:
+
+```bash
+python eval.py --config eval_config.json
+```
+
+Override specific fields from the CLI:
+
+```bash
+python eval.py --config eval_config.json --checkpoint ./results/checkpoint-10000 --batch_size 16
+```
