@@ -1,4 +1,5 @@
 import argparse
+import json
 from datasets import load_dataset, Dataset
 import DeepseekTokenizer
 import torch
@@ -16,14 +17,46 @@ def str2bool(v):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Tokenize and pack dataset into fixed-size chunks.")
-    parser.add_argument("--dataset_path", type=str, required=True, help="Dataset path or HuggingFace repo ID (e.g. roneneldan/TinyStories)")
+    parser.add_argument("--config", type=str, default=None, help="Path to JSON config file")
+    parser.add_argument("--dataset_path", type=str, default=None, help="Dataset path or HuggingFace repo ID (e.g. roneneldan/TinyStories)")
     parser.add_argument("--name", "--dataset_name", dest="name", type=str, default=None, help="Dataset configuration/subset name for load_dataset (default: None)")
-    parser.add_argument("--save_path", type=str, required=True, help="Directory path to save the processed dataset")
-    parser.add_argument("--block_size", type=int, default=1024, help="Context block size (default: 1024, chunk length will be block_size + 1)")
+    parser.add_argument("--save_path", type=str, default=None, help="Directory path to save the processed dataset")
+    parser.add_argument("--block_size", type=int, default=None, help="Context block size (default: 1024, chunk length will be block_size + 1)")
     parser.add_argument("--cache_dir", type=str, default=None, help="Cache directory for HuggingFace datasets (default: None)")
-    parser.add_argument("--streaming", type=str2bool, nargs="?", const=True, default=True, help="Whether to stream the dataset (default: True)")
-    parser.add_argument("--split", type=str, default="train", help="Dataset split to load (default: train)")
-    return parser.parse_args()
+    parser.add_argument("--streaming", type=str2bool, nargs="?", const=True, default=None, help="Whether to stream the dataset (default: True)")
+    parser.add_argument("--split", type=str, default=None, help="Dataset split to load (default: train)")
+
+    args = parser.parse_args()
+
+    defaults = {
+        "dataset_path": None,
+        "name": None,
+        "save_path": None,
+        "block_size": 1024,
+        "cache_dir": None,
+        "streaming": True,
+        "split": "train",
+    }
+
+    if args.config:
+        with open(args.config, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+        if "dataset_name" in config_data and "name" not in config_data:
+            config_data["name"] = config_data.pop("dataset_name")
+        defaults.update(config_data)
+
+    for key, default_val in defaults.items():
+        cli_val = getattr(args, key, None)
+        if cli_val is None:
+            setattr(args, key, default_val)
+
+    args.streaming = str2bool(args.streaming) if not isinstance(args.streaming, bool) else args.streaming
+    args.block_size = int(args.block_size)
+
+    if not args.dataset_path or not args.save_path:
+        parser.error("--dataset_path and --save_path must be provided either via CLI or in --config JSON file.")
+
+    return args
 
 
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
