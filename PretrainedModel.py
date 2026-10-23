@@ -117,7 +117,7 @@ class LossLoggingCallback(TrainerCallback):
             #   f"Average Loss: {state.log_history[-1]['loss']:.4f}")
 
 def data_collator(batch):
-    ids = torch.tensor([example['input'].tolist() for example in batch])
+    ids = torch.stack([example['input'] for example in batch])
     # print(ids.shape, ids, ids[:,:-1], ids[:,1:])
     return {"input_ids":ids[:,:-1], "labels":ids[:,1:]}
 
