@@ -1,31 +1,18 @@
-from transformers import Trainer, TrainingArguments
-from torch.optim import AdamW
+from transformers import Trainer, TrainingArguments, trainer_pt_utils
+import bitsandbytes as bnb
 import torch
+import MyLlama
+
+ALL_LAYERNORM_LAYERS = [torch.nn.LayerNorm, torch.nn.Embedding, MyLlama.RMSNorm, torch.nn.RMSNorm]
 
 class MyHuggingfaceTrainer(Trainer):
-    def create_optimizer(self):
-        model = self.model
-        no_decay = ["bias", "LayerNorm.weight", "layernorm.weight", "norm.weight", "embedding"]
+    def get_decay_parameter_names(self, model) -> list[str]:
+        """
+        Get all parameter names that weight decay will be applied to.
 
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and p.requires_grad],
-                "weight_decay": self.args.weight_decay,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad],
-                "weight_decay": 0.0,
-            },
-        ]
-
-        optimizer_kwargs = {
-            "betas": (self.args.adam_beta1, self.args.adam_beta2),
-            "eps": self.args.adam_epsilon,
-            "lr": self.args.learning_rate,
-        }
-        self.optimizer = AdamW(optimizer_grouped_parameters, **optimizer_kwargs)
-
-        if self.sharded_dpp:
-            self.optimizer = self.sharded_dpp.create_optimizer(optimizer_grouped_parameters, **optimizer_kwargs)
-
-        return self.optimizer
+        This function filters out parameters in two ways:
+        1. By layer type (instances of layers specified in ALL_LAYERNORM_LAYERS)
+        2. By parameter name patterns (containing 'bias', 'layernorm', or 'rmsnorm')
+        """
+        decay_parameters = trainer_pt_utils.get_parameter_names(model, ALL_LAYERNORM_LAYERS, ["bias", "layernorm", "rmsnorm"])
+        return decay_parameters
