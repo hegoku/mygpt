@@ -54,7 +54,20 @@ class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
         
         loss = None
         if labels is not None:
-            loss = torch.nn.functional.cross_entropy(embedding.flatten(0, 1), labels.flatten(), ignore_index=self.config.pad_token_id)
+            num_items_in_batch = kwargs.get("num_items_in_batch", None)
+            if num_items_in_batch is not None:
+                loss = torch.nn.functional.cross_entropy(
+                    embedding.flatten(0, 1),
+                    labels.flatten(),
+                    ignore_index=self.config.pad_token_id,
+                    reduction="sum",
+                ) / num_items_in_batch
+            else:
+                loss = torch.nn.functional.cross_entropy(
+                    embedding.flatten(0, 1),
+                    labels.flatten(),
+                    ignore_index=self.config.pad_token_id,
+                )
         return CausalLMOutputWithPast(loss=loss, logits=embedding, past_key_values=None)
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
