@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import re
+import sys
 from datasets import load_dataset, Dataset
 import DeepseekTokenizer
 import torch
@@ -210,30 +212,34 @@ def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tok
     phase = "train"
     torch_dtype = DTYPE_MAP[dtype][1]
     print(f"\nStarting stream: Packing tokenized records into chunks (dtype={dtype})...")
-    for token_list in tokenized_stream_generator(dataset, text_column=text_column):
-        buffer.extend(token_list)
-        
-        while len(buffer) >= (block_size + 1):
-            chunk = torch.tensor(buffer[:block_size + 1], dtype=torch_dtype)
-            buffer = buffer[block_size:]
-            if phase == "train":
-                token_total += chunk.shape[0] - 1
-                yield {"input": chunk}
-                if max_tokens is not None and token_total >= max_tokens:
-                    if test_tokens is not None and test_tokens > 0:
-                        print(f"\nReached train max_tokens ({token_total:,} >= {max_tokens:,}). Clearing buffer and switching to test split...")
-                        buffer = []
-                        phase = "test"
-                        break
-                    else:
-                        print(f"\nReached max_tokens limit ({token_total:,} >= {max_tokens:,}). Stopping stream.")
+    token_stream = tokenized_stream_generator(dataset, text_column=text_column)
+    try:
+        for token_list in token_stream:
+            buffer.extend(token_list)
+            
+            while len(buffer) >= (block_size + 1):
+                chunk = torch.tensor(buffer[:block_size + 1], dtype=torch_dtype)
+                buffer = buffer[block_size:]
+                if phase == "train":
+                    token_total += chunk.shape[0] - 1
+                    yield {"input": chunk}
+                    if max_tokens is not None and token_total >= max_tokens:
+                        if test_tokens is not None and test_tokens > 0:
+                            print(f"\nReached train max_tokens ({token_total:,} >= {max_tokens:,}). Clearing buffer and switching to test split...")
+                            buffer = []
+                            phase = "test"
+                            break
+                        else:
+                            print(f"\nReached max_tokens limit ({token_total:,} >= {max_tokens:,}). Stopping stream.")
+                            return
+                else:
+                    test_token_total += chunk.shape[0] - 1
+                    yield {"input": chunk}
+                    if test_token_total >= test_tokens:
+                        print(f"\nReached test_tokens limit ({test_token_total:,} >= {test_tokens:,}). Stopping stream.")
                         return
-            else:
-                test_token_total += chunk.shape[0] - 1
-                yield {"input": chunk}
-                if test_token_total >= test_tokens:
-                    print(f"\nReached test_tokens limit ({test_token_total:,} >= {test_tokens:,}). Stopping stream.")
-                    return
+    finally:
+        token_stream.close()
 
 
 if __name__ == "__main__":
@@ -297,3 +303,7 @@ if __name__ == "__main__":
             chunked_dataset.save_to_disk(args.save_path)
             print(f"Total token: {token_total}")
         print(f"Total unknown token: {unknown_count}")
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
