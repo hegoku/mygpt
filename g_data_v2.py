@@ -1,8 +1,49 @@
 import argparse
 import json
+import re
 from datasets import load_dataset, Dataset
 import DeepseekTokenizer
 import torch
+
+
+DTYPE_MAP = {
+    "int32": ("int32", torch.int32, 4),
+    "32": ("int32", torch.int32, 4),
+    "int64": ("int64", torch.int64, 8),
+    "64": ("int64", torch.int64, 8),
+}
+
+
+def parse_dtype(v):
+    key = str(v).strip().lower()
+    if key not in DTYPE_MAP:
+        raise argparse.ArgumentTypeError(f"Unsupported dtype '{v}'. Choose from: int32, int64 (or 32, 64).")
+    return DTYPE_MAP[key][0]
+
+
+def parse_size_to_bytes(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().upper()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(B|KB|K|MB|M|GB|G|TB|T)?", s)
+    if not m:
+        raise argparse.ArgumentTypeError(f"Invalid size format '{v}'. Examples: '500MB', '2GB', '1.5G'.")
+    num = float(m.group(1))
+    unit = m.group(2) or "B"
+    multipliers = {
+        "B": 1,
+        "K": 1024,
+        "KB": 1024,
+        "M": 1024**2,
+        "MB": 1024**2,
+        "G": 1024**3,
+        "GB": 1024**3,
+        "T": 1024**4,
+        "TB": 1024**4,
+    }
+    return int(num * multipliers[unit])
 
 
 def str2bool(v):
@@ -26,6 +67,8 @@ def parse_args():
     parser.add_argument("--streaming", type=str2bool, nargs="?", const=True, default=None, help="Whether to stream the dataset (default: True)")
     parser.add_argument("--split", type=str, default=None, help="Dataset split to load (default: train)")
     parser.add_argument("--text_column", type=str, default=None, help="Column name containing text data (default: text)")
+    parser.add_argument("--dtype", type=str, default=None, help="Integer dtype for saved token chunks: int32 or int64 (default: int64)")
+    parser.add_argument("--max_size", type=str, default=None, help="Maximum output dataset size on disk, e.g. '500MB', '2GB' (default: None)")
     parser.add_argument("--max_tokens", type=int, default=None, help="Maximum number of training tokens to generate before stopping (default: None)")
     parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of raw dataset records (samples) to read (default: None)")
 
@@ -40,6 +83,8 @@ def parse_args():
         "streaming": True,
         "split": "train",
         "text_column": "text",
+        "dtype": "int64",
+        "max_size": None,
         "max_tokens": None,
         "max_samples": None,
     }
@@ -80,8 +125,17 @@ def parse_args():
             else task_cfg["streaming"]
         )
         task_cfg["block_size"] = int(task_cfg["block_size"])
+        task_cfg["dtype"] = parse_dtype(task_cfg["dtype"])
         if task_cfg["max_tokens"] is not None:
             task_cfg["max_tokens"] = int(task_cfg["max_tokens"])
+        if task_cfg["max_size"] is not None:
+            max_bytes = parse_size_to_bytes(task_cfg["max_size"])
+            bytes_per_elem = DTYPE_MAP[task_cfg["dtype"]][2]
+            bytes_per_chunk = (task_cfg["block_size"] + 1) * bytes_per_elem
+            max_chunks_from_size = max(1, max_bytes // bytes_per_chunk)
+            tokens_from_size = max_chunks_from_size * task_cfg["block_size"]
+            if task_cfg["max_tokens"] is None or tokens_from_size < task_cfg["max_tokens"]:
+                task_cfg["max_tokens"] = tokens_from_size
         if task_cfg["max_samples"] is not None:
             task_cfg["max_samples"] = int(task_cfg["max_samples"])
 
@@ -123,15 +177,16 @@ def tokenized_stream_generator(dataset, text_column="text"):
 
 # --- 3. 创建一个流，负责拼接和分块 ---
 token_total = 0
-def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tokens=None):
+def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tokens=None, dtype="int64"):
     global token_total
     buffer = []
-    print("\nStarting stream: Packing tokenized records into chunks...")
+    torch_dtype = DTYPE_MAP[dtype][1]
+    print(f"\nStarting stream: Packing tokenized records into chunks (dtype={dtype})...")
     for token_list in tokenized_stream_generator(dataset, text_column=text_column):
         buffer.extend(token_list)
         
         while len(buffer) >= (block_size + 1):
-            chunk = torch.tensor(buffer[:block_size + 1])
+            chunk = torch.tensor(buffer[:block_size + 1], dtype=torch_dtype)
             buffer = buffer[block_size:]
             token_total += chunk.shape[0] - 1
             yield {"input": chunk}
@@ -149,12 +204,13 @@ if __name__ == "__main__":
         token_total = 0
         cache_dir = args.cache_dir if args.cache_dir else None
         dataset_name = args.name if args.name else None
+        bytes_per_elem = DTYPE_MAP[args.dtype][2]
 
-        print(f"\n[{idx}/{total_tasks}] dataset={args.dataset_path} (name={dataset_name}, split={args.split}) -> {args.save_path}")
+        print(f"\n[{idx}/{total_tasks}] dataset={args.dataset_path} (name={dataset_name}, split={args.split}, dtype={args.dtype}) -> {args.save_path}")
         if args.max_tokens is not None:
             est_chunks = (args.max_tokens + args.block_size - 1) // args.block_size
-            est_bytes = est_chunks * (args.block_size + 1) * 8
-            print(f"Estimated output for max_tokens={args.max_tokens:,}: ~{est_chunks:,} chunks, ~{est_bytes / (1024**2):.2f} MB ({est_bytes / (1024**3):.2f} GB)")
+            est_bytes = est_chunks * (args.block_size + 1) * bytes_per_elem
+            print(f"Estimated output for max_tokens={args.max_tokens:,}: ~{est_chunks:,} chunks, ~{est_bytes / (1024**2):.2f} MB ({est_bytes / (1024**3):.2f} GiB)")
 
         stream_dataset = load_dataset(
             args.dataset_path,
@@ -177,6 +233,7 @@ if __name__ == "__main__":
                 "block_size": args.block_size,
                 "text_column": args.text_column,
                 "max_tokens": args.max_tokens,
+                "dtype": args.dtype,
             },
             cache_dir=cache_dir,
         )

@@ -5,7 +5,6 @@ import torch.nn as nn
 from transformers import TrainingArguments
 from transformers import Trainer
 import DeepseekTokenizer
-import MyDataset
 import torch
 from transformers import TrainerCallback
 import os
@@ -23,10 +22,10 @@ training_args = TrainingArguments(
     per_device_train_batch_size=7,
     # ignore_data_skip=True,
     # per_device_eval_batch_size=2,
-    gradient_accumulation_steps=72,
+    gradient_accumulation_steps=32,
     eval_strategy="no",
-    learning_rate=0.001,
-    logging_dir="./logs",
+    learning_rate=0.0003,
+    # logging_dir="./logs",
     logging_steps=5,
     save_steps=500,
     save_strategy="steps",
@@ -36,18 +35,20 @@ training_args = TrainingArguments(
     adam_beta2=0.95,
     # seed=123,
     # warmup_ratio=0.03,
-    warmup_steps=0,
-    lr_scheduler_type="warmup_stable_decay",
-    lr_scheduler_kwargs={
-        "num_decay_steps":16804,
-        "num_stable_steps":24178,
-        "min_lr_ratio":0.01
-    },
+    warmup_steps=0.03,
+    lr_scheduler_type="cosine",
+    # lr_scheduler_type="warmup_stable_decay",
+    # lr_scheduler_kwargs={
+    #     "num_decay_steps":16804,
+    #     "num_stable_steps":24178,
+    #     "min_lr_ratio":0.01
+    # },
     run_name="test",
-    optim="adamw_bnb_8bit",
+    # optim="adamw_bnb_8bit",
+    optim="adamw_torch",
     dataloader_pin_memory=False,
     torch_compile=True,
-    label_names=['target'],
+    # label_names=['target'],
     remove_unused_columns=False
     # resume_from_checkpoint=True
 )
@@ -65,11 +66,11 @@ print(f"Using {device} device.")
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 # config = MyGPTPretrainedModel.MyGPTPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id)
 # model = MyGPTPretrainedModel.MyGPTPretrainedModel(config).to(device, dtype=torch.bfloat16)
-config = MyLlamaPretrainedModel.MyLlamaPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id, layers=24, embedding_dim=512, head_num=8, max_context=2048)
+config = MyLlamaPretrainedModel.MyLlamaPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id, layers=24, embedding_dim=512, head_num=8, max_context=1024)
 model = MyLlamaPretrainedModel.MyLlamaPretrainedModel(config).to(device, dtype=torch.bfloat16)
 # model = MyLlamaPretrainedModel.MyLlamaPretrainedModel.from_pretrained("./results1/checkpoint-47000").to(device, dtype=torch.bfloat16)
 
-train_dataset = load_from_disk('./aaa')
+train_dataset = load_from_disk('/Users/jack/Downloads/TinyStories')
 # train_dataset = train_dataset.to_iterable_dataset()
 # train_dataset = train_dataset.shuffle(123, buffer_size=100)
 # train_dataset = train_dataset.batch(batch_size=16)
@@ -117,7 +118,7 @@ class LossLoggingCallback(TrainerCallback):
             #   f"Average Loss: {state.log_history[-1]['loss']:.4f}")
 
 def data_collator(batch):
-    ids = torch.stack([example['input'] for example in batch])
+    ids = torch.stack([example['input'] for example in batch]).to(torch.int64)
     # print(ids.shape, ids, ids[:,:-1], ids[:,1:])
     return {"input_ids":ids[:,:-1], "labels":ids[:,1:]}
 
@@ -130,7 +131,7 @@ trainer = MyHuggingfaceTrainer.MyHuggingfaceTrainer(
     data_collator=data_collator
 )
 
-trainer.train(resume_from_checkpoint="./results1/checkpoint-72500")  # 开始训练！
-# trainer.train()
+# trainer.train(resume_from_checkpoint="./results1/checkpoint-72500")  # 开始训练！
+trainer.train()
 
 print(generate_and_print_sample(model, tokenizer, device, "数学家希望"))

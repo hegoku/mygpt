@@ -15,7 +15,9 @@
 | `--streaming` | `bool` | No | `True` | Whether to load the source dataset in streaming mode (`True` / `False`). |
 | `--split` | `str` | No | `train` | Dataset split to process (e.g., `train`, `validation`). |
 | `--text_column` | `str` | No | `text` | Name of the column containing text data (e.g., `text`, `content`). |
-| `--max_tokens` | `int` | No | `None` | Stop after packing at least this many training tokens (approx. `8 bytes / token` on disk). |
+| `--dtype` | `str` | No | `int64` | Integer type for saved chunks: `int32` (`4 bytes/token`) or `int64` (`8 bytes/token`). Also accepts `32` or `64`. |
+| `--max_size` | `str` | No | `None` | Target maximum output disk size (e.g., `"500MB"`, `"2GB"`, `"1.5G"`). Automatically converts to `max_tokens`. |
+| `--max_tokens` | `int` | No | `None` | Stop after packing at least this many training tokens. |
 | `--max_samples` | `int` | No | `None` | Maximum number of raw source records (documents) to read from the dataset. |
 
 *\*`--dataset_path` and `--save_path` must be provided either via CLI or inside the `--config` JSON file.*
