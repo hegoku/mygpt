@@ -16,9 +16,12 @@
 | `--split` | `str` | No | `train` | Dataset split to process (e.g., `train`, `validation`). |
 | `--text_column` | `str` | No | `text` | Name of the column containing text data (e.g., `text`, `content`). |
 | `--dtype` | `str` | No | `int64` | Integer type for saved chunks: `int32` (`4 bytes/token`) or `int64` (`8 bytes/token`). Also accepts `32` or `64`. |
-| `--max_size` | `str` | No | `None` | Target maximum output disk size (e.g., `"500MB"`, `"2GB"`, `"1.5G"`). Automatically converts to `max_tokens`. |
+| `--max_size` | `str` | No | `None` | Target maximum train output disk size (e.g., `"500MB"`, `"2GB"`, `"1.5G"`). Automatically converts to `max_tokens`. |
 | `--max_tokens` | `int` | No | `None` | Stop after packing at least this many training tokens. |
 | `--max_samples` | `int` | No | `None` | Maximum number of raw source records (documents) to read from the dataset. |
+| `--test_save_path` | `str` | No | `None` | Directory path to save a non-overlapping test split carved out immediately after the train split. |
+| `--test_size` | `str` | No | `None` | Target output disk size for the test split (e.g., `"20MB"`, `"100MB"`). Automatically converts to `test_tokens`. |
+| `--test_tokens` | `int` | No | `None` | Target number of tokens to pack for the test split after `max_tokens` is reached. |
 
 *\*`--dataset_path` and `--save_path` must be provided either via CLI or inside the `--config` JSON file.*
 

@@ -68,9 +68,12 @@ def parse_args():
     parser.add_argument("--split", type=str, default=None, help="Dataset split to load (default: train)")
     parser.add_argument("--text_column", type=str, default=None, help="Column name containing text data (default: text)")
     parser.add_argument("--dtype", type=str, default=None, help="Integer dtype for saved token chunks: int32 or int64 (default: int64)")
-    parser.add_argument("--max_size", type=str, default=None, help="Maximum output dataset size on disk, e.g. '500MB', '2GB' (default: None)")
-    parser.add_argument("--max_tokens", type=int, default=None, help="Maximum number of training tokens to generate before stopping (default: None)")
+    parser.add_argument("--max_size", type=str, default=None, help="Maximum train dataset size on disk, e.g. '500MB', '2GB' (default: None)")
+    parser.add_argument("--max_tokens", type=int, default=None, help="Maximum number of train tokens to generate before stopping (default: None)")
     parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of raw dataset records (samples) to read (default: None)")
+    parser.add_argument("--test_save_path", type=str, default=None, help="Directory path to save the carved-out test dataset (default: None)")
+    parser.add_argument("--test_size", type=str, default=None, help="Target test dataset size on disk, e.g. '20MB', '100MB' (default: None)")
+    parser.add_argument("--test_tokens", type=int, default=None, help="Target number of test tokens to generate after train split (default: None)")
 
     args = parser.parse_args()
 
@@ -87,6 +90,9 @@ def parse_args():
         "max_size": None,
         "max_tokens": None,
         "max_samples": None,
+        "test_save_path": None,
+        "test_size": None,
+        "test_tokens": None,
     }
 
     raw_configs = [{}]
@@ -126,16 +132,36 @@ def parse_args():
         )
         task_cfg["block_size"] = int(task_cfg["block_size"])
         task_cfg["dtype"] = parse_dtype(task_cfg["dtype"])
+        bytes_per_elem = DTYPE_MAP[task_cfg["dtype"]][2]
+        bytes_per_chunk = (task_cfg["block_size"] + 1) * bytes_per_elem
+
         if task_cfg["max_tokens"] is not None:
             task_cfg["max_tokens"] = int(task_cfg["max_tokens"])
         if task_cfg["max_size"] is not None:
             max_bytes = parse_size_to_bytes(task_cfg["max_size"])
-            bytes_per_elem = DTYPE_MAP[task_cfg["dtype"]][2]
-            bytes_per_chunk = (task_cfg["block_size"] + 1) * bytes_per_elem
             max_chunks_from_size = max(1, max_bytes // bytes_per_chunk)
             tokens_from_size = max_chunks_from_size * task_cfg["block_size"]
             if task_cfg["max_tokens"] is None or tokens_from_size < task_cfg["max_tokens"]:
                 task_cfg["max_tokens"] = tokens_from_size
+
+        if task_cfg["test_tokens"] is not None:
+            task_cfg["test_tokens"] = int(task_cfg["test_tokens"])
+        if task_cfg["test_size"] is not None:
+            test_bytes = parse_size_to_bytes(task_cfg["test_size"])
+            test_chunks_from_size = max(1, test_bytes // bytes_per_chunk)
+            test_tokens_from_size = test_chunks_from_size * task_cfg["block_size"]
+            if task_cfg["test_tokens"] is None or test_tokens_from_size < task_cfg["test_tokens"]:
+                task_cfg["test_tokens"] = test_tokens_from_size
+
+        if task_cfg["test_save_path"] and not task_cfg["test_tokens"]:
+            parser.error(
+                f"Task #{idx + 1}: --test_tokens or --test_size must be provided when --test_save_path is set."
+            )
+        if task_cfg["test_save_path"] and task_cfg["max_tokens"] is None:
+            parser.error(
+                f"Task #{idx + 1}: --max_tokens or --max_size must be provided when carving out a test split via --test_save_path."
+            )
+
         if task_cfg["max_samples"] is not None:
             task_cfg["max_samples"] = int(task_cfg["max_samples"])
 
@@ -177,9 +203,11 @@ def tokenized_stream_generator(dataset, text_column="text"):
 
 # --- 3. 创建一个流，负责拼接和分块 ---
 token_total = 0
-def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tokens=None, dtype="int64"):
-    global token_total
+test_token_total = 0
+def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tokens=None, test_tokens=None, dtype="int64"):
+    global token_total, test_token_total
     buffer = []
+    phase = "train"
     torch_dtype = DTYPE_MAP[dtype][1]
     print(f"\nStarting stream: Packing tokenized records into chunks (dtype={dtype})...")
     for token_list in tokenized_stream_generator(dataset, text_column=text_column):
@@ -188,11 +216,24 @@ def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tok
         while len(buffer) >= (block_size + 1):
             chunk = torch.tensor(buffer[:block_size + 1], dtype=torch_dtype)
             buffer = buffer[block_size:]
-            token_total += chunk.shape[0] - 1
-            yield {"input": chunk}
-            if max_tokens is not None and token_total >= max_tokens:
-                print(f"\nReached max_tokens limit ({token_total} >= {max_tokens}). Stopping stream.")
-                return
+            if phase == "train":
+                token_total += chunk.shape[0] - 1
+                yield {"input": chunk}
+                if max_tokens is not None and token_total >= max_tokens:
+                    if test_tokens is not None and test_tokens > 0:
+                        print(f"\nReached train max_tokens ({token_total:,} >= {max_tokens:,}). Clearing buffer and switching to test split...")
+                        buffer = []
+                        phase = "test"
+                        break
+                    else:
+                        print(f"\nReached max_tokens limit ({token_total:,} >= {max_tokens:,}). Stopping stream.")
+                        return
+            else:
+                test_token_total += chunk.shape[0] - 1
+                yield {"input": chunk}
+                if test_token_total >= test_tokens:
+                    print(f"\nReached test_tokens limit ({test_token_total:,} >= {test_tokens:,}). Stopping stream.")
+                    return
 
 
 if __name__ == "__main__":
@@ -202,6 +243,7 @@ if __name__ == "__main__":
     for idx, args in enumerate(tasks, start=1):
         unknown_count = 0
         token_total = 0
+        test_token_total = 0
         cache_dir = args.cache_dir if args.cache_dir else None
         dataset_name = args.name if args.name else None
         bytes_per_elem = DTYPE_MAP[args.dtype][2]
@@ -210,7 +252,11 @@ if __name__ == "__main__":
         if args.max_tokens is not None:
             est_chunks = (args.max_tokens + args.block_size - 1) // args.block_size
             est_bytes = est_chunks * (args.block_size + 1) * bytes_per_elem
-            print(f"Estimated output for max_tokens={args.max_tokens:,}: ~{est_chunks:,} chunks, ~{est_bytes / (1024**2):.2f} MB ({est_bytes / (1024**3):.2f} GiB)")
+            print(f"Estimated train output for max_tokens={args.max_tokens:,}: ~{est_chunks:,} chunks, ~{est_bytes / (1024**2):.2f} MB ({est_bytes / (1024**3):.2f} GiB)")
+        if args.test_save_path and args.test_tokens is not None:
+            est_test_chunks = (args.test_tokens + args.block_size - 1) // args.block_size
+            est_test_bytes = est_test_chunks * (args.block_size + 1) * bytes_per_elem
+            print(f"Estimated test output for test_tokens={args.test_tokens:,} -> {args.test_save_path}: ~{est_test_chunks:,} chunks, ~{est_test_bytes / (1024**2):.2f} MB ({est_test_bytes / (1024**3):.2f} GiB)")
 
         stream_dataset = load_dataset(
             args.dataset_path,
@@ -233,10 +279,21 @@ if __name__ == "__main__":
                 "block_size": args.block_size,
                 "text_column": args.text_column,
                 "max_tokens": args.max_tokens,
+                "test_tokens": args.test_tokens if args.test_save_path else None,
                 "dtype": args.dtype,
             },
             cache_dir=cache_dir,
         )
-        chunked_dataset.save_to_disk(args.save_path)
-        print(f"Total token: {token_total}")
+
+        if args.test_save_path:
+            n_train_chunks = min((args.max_tokens + args.block_size - 1) // args.block_size, len(chunked_dataset))
+            train_dataset = chunked_dataset.select(range(0, n_train_chunks))
+            test_dataset = chunked_dataset.select(range(n_train_chunks, len(chunked_dataset)))
+            train_dataset.save_to_disk(args.save_path)
+            test_dataset.save_to_disk(args.test_save_path)
+            print(f"Train chunks: {len(train_dataset):,}, Total train token: {len(train_dataset) * args.block_size:,}")
+            print(f"Test chunks: {len(test_dataset):,}, Total test token: {len(test_dataset) * args.block_size:,}")
+        else:
+            chunked_dataset.save_to_disk(args.save_path)
+            print(f"Total token: {token_total}")
         print(f"Total unknown token: {unknown_count}")
