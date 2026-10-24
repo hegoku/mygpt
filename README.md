@@ -6,7 +6,7 @@
 
 | Argument | Type | Required | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--config` | `str` | No | `None` | Path to a JSON configuration file. CLI arguments override values in the config file. |
+| `--config` | `str` | No | `None` | Path to a JSON configuration file (supports a single object `{...}` or an array of objects `[{...}, ...]`). CLI arguments override values in the config file. |
 | `--dataset_path` | `str` | Yes* | `None` | Hugging Face Hub dataset ID (e.g., `roneneldan/TinyStories`) or local path. |
 | `--save_path` | `str` | Yes* | `None` | Output directory path where the processed dataset will be saved via `save_to_disk`. |
 | `--name`, `--dataset_name` | `str` | No | `None` | Dataset configuration/subset name passed to `load_dataset(..., name=...)`. |
@@ -44,7 +44,9 @@ python g_data_v2.py \
 
 ### 2. Using a JSON Configuration File
 
-Create a `config.json` file:
+The JSON configuration file can be either a **single object** or an **array of objects** (executed sequentially in a loop).
+
+Single task (`config.json`):
 
 ```json
 {
@@ -56,6 +58,23 @@ Create a `config.json` file:
   "streaming": true,
   "split": "train"
 }
+```
+
+Multiple tasks (`config.json`):
+
+```json
+[
+  {
+    "dataset_path": "roneneldan/TinyStories",
+    "save_path": "/Volumes/TinyStories_train",
+    "split": "train"
+  },
+  {
+    "dataset_path": "roneneldan/TinyStories",
+    "save_path": "/Volumes/TinyStories_val",
+    "split": "validation"
+  }
+]
 ```
 
 Run with the config file:
@@ -80,7 +99,7 @@ python g_data_v2.py --config config.json --block_size 512 --split validation
 
 | Argument | Type | Required | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--config` | `str` | No | `None` | Path to a JSON configuration file. CLI arguments override values in the config file. |
+| `--config` | `str` | No | `None` | Path to a JSON configuration file (supports a single object `{...}` or an array of objects `[{...}, ...]`). CLI arguments override values in the config file. |
 | `--dataset_path` | `str` | Yes* | `None` | Local directory path to the processed validation dataset (saved via `save_to_disk`). |
 | `--checkpoint` | `str` | Yes* | `None` | Path to the model checkpoint directory (loaded via `from_pretrained`). |
 | `--batch_size` | `int` | No | `8` | Batch size used during evaluation. |
@@ -110,7 +129,9 @@ python eval.py \
 
 ### 2. Using a JSON Configuration File
 
-Create an `eval_config.json` file:
+The JSON configuration file can be either a **single object** or an **array of objects** (executed sequentially in a loop; unchanged `checkpoint` or `dataset_path` between consecutive tasks are automatically reused without reloading).
+
+Single task (`eval_config.json`):
 
 ```json
 {
@@ -118,6 +139,23 @@ Create an `eval_config.json` file:
   "checkpoint": "./results/checkpoint-5000",
   "batch_size": 8
 }
+```
+
+Multiple tasks (`eval_config.json`):
+
+```json
+[
+  {
+    "dataset_path": "/Volumes/TinyStories_val",
+    "checkpoint": "./results/checkpoint-5000",
+    "batch_size": 8
+  },
+  {
+    "dataset_path": "/Volumes/TinyStories_val",
+    "checkpoint": "./results/checkpoint-10000",
+    "batch_size": 8
+  }
+]
 ```
 
 Run with the config file:

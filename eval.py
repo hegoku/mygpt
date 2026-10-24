@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate model loss on a validation dataset.")
-    parser.add_argument("--config", type=str, default=None, help="Path to JSON config file")
+    parser.add_argument("--config", type=str, default=None, help="Path to JSON config file (supports a single object or an array of objects)")
     parser.add_argument("--dataset_path", type=str, default=None, help="Validation dataset path on disk")
     parser.add_argument("--checkpoint", type=str, default=None, help="Model checkpoint path")
     parser.add_argument("--batch_size", type=int, default=None, help="Evaluation batch size (default: 8)")
@@ -23,22 +23,42 @@ def parse_args():
         "batch_size": 8,
     }
 
+    raw_configs = [{}]
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
             config_data = json.load(f)
-        defaults.update(config_data)
+        if isinstance(config_data, list):
+            if not config_data:
+                parser.error("The JSON config array cannot be empty.")
+            raw_configs = config_data
+        elif isinstance(config_data, dict):
+            raw_configs = [config_data]
+        else:
+            parser.error("--config JSON must be an object or an array of objects.")
 
-    for key, default_val in defaults.items():
-        cli_val = getattr(args, key, None)
-        if cli_val is None:
-            setattr(args, key, default_val)
+    tasks = []
+    for idx, item in enumerate(raw_configs):
+        if not isinstance(item, dict):
+            parser.error(f"Config item at index {idx} must be a JSON object.")
 
-    args.batch_size = int(args.batch_size)
+        task_cfg = dict(defaults)
+        task_cfg.update(item)
 
-    if not args.dataset_path or not args.checkpoint:
-        parser.error("--dataset_path and --checkpoint must be provided either via CLI or in --config JSON file.")
+        for key in defaults:
+            cli_val = getattr(args, key, None)
+            if cli_val is not None:
+                task_cfg[key] = cli_val
 
-    return args
+        task_cfg["batch_size"] = int(task_cfg["batch_size"])
+
+        if not task_cfg["dataset_path"] or not task_cfg["checkpoint"]:
+            parser.error(
+                f"Task #{idx + 1}: --dataset_path and --checkpoint must be provided either via CLI or in --config JSON file."
+            )
+
+        tasks.append(argparse.Namespace(**task_cfg))
+
+    return tasks
 
 
 def data_collator(batch):
@@ -70,7 +90,7 @@ def evaluate(model, dataloader, device):
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    tasks = parse_args()
 
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -82,19 +102,34 @@ if __name__ == "__main__":
     print(f"Using {device} device.")
 
     tokenizer = DeepseekTokenizer.DeepseekTokenizer()
-    model = MyLlamaPretrainedModel.MyLlamaPretrainedModel.from_pretrained(args.checkpoint).to(device, dtype=torch.bfloat16)
 
-    eval_dataset = load_from_disk(args.dataset_path)
-    eval_dataset = eval_dataset.with_format("torch")
-    print(f"Eval data loaded: {len(eval_dataset)} samples")
+    current_checkpoint = None
+    model = None
+    current_dataset_path = None
+    eval_dataset = None
 
-    eval_loader = DataLoader(
-        eval_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=data_collator,
-    )
+    total_tasks = len(tasks)
+    for idx, task in enumerate(tasks, start=1):
+        print(f"\n[{idx}/{total_tasks}] checkpoint={task.checkpoint} | dataset={task.dataset_path} | batch_size={task.batch_size}")
 
-    val_loss = evaluate(model, eval_loader, device)
-    ppl = math.exp(val_loss) if not math.isnan(val_loss) and val_loss < 20 else float("inf")
-    print(f"Validation Loss: {val_loss:.4f} | Perplexity: {ppl:.4f}")
+        if task.checkpoint != current_checkpoint:
+            model = MyLlamaPretrainedModel.MyLlamaPretrainedModel.from_pretrained(task.checkpoint).to(
+                device, dtype=torch.bfloat16
+            )
+            current_checkpoint = task.checkpoint
+
+        if task.dataset_path != current_dataset_path:
+            eval_dataset = load_from_disk(task.dataset_path).with_format("torch")
+            current_dataset_path = task.dataset_path
+            print(f"Eval data loaded: {len(eval_dataset)} samples")
+
+        eval_loader = DataLoader(
+            eval_dataset,
+            batch_size=task.batch_size,
+            shuffle=False,
+            collate_fn=data_collator,
+        )
+
+        val_loss = evaluate(model, eval_loader, device)
+        ppl = math.exp(val_loss) if not math.isnan(val_loss) and val_loss < 20 else float("inf")
+        print(f"Validation Loss: {val_loss:.4f} | Perplexity: {ppl:.4f}")

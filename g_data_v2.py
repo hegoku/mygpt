@@ -17,7 +17,7 @@ def str2bool(v):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Tokenize and pack dataset into fixed-size chunks.")
-    parser.add_argument("--config", type=str, default=None, help="Path to JSON config file")
+    parser.add_argument("--config", type=str, default=None, help="Path to JSON config file (supports a single object or an array of objects)")
     parser.add_argument("--dataset_path", type=str, default=None, help="Dataset path or HuggingFace repo ID (e.g. roneneldan/TinyStories)")
     parser.add_argument("--name", "--dataset_name", dest="name", type=str, default=None, help="Dataset configuration/subset name for load_dataset (default: None)")
     parser.add_argument("--save_path", type=str, default=None, help="Directory path to save the processed dataset")
@@ -38,25 +38,51 @@ def parse_args():
         "split": "train",
     }
 
+    raw_configs = [{}]
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
             config_data = json.load(f)
-        if "dataset_name" in config_data and "name" not in config_data:
-            config_data["name"] = config_data.pop("dataset_name")
-        defaults.update(config_data)
+        if isinstance(config_data, list):
+            if not config_data:
+                parser.error("The JSON config array cannot be empty.")
+            raw_configs = config_data
+        elif isinstance(config_data, dict):
+            raw_configs = [config_data]
+        else:
+            parser.error("--config JSON must be an object or an array of objects.")
 
-    for key, default_val in defaults.items():
-        cli_val = getattr(args, key, None)
-        if cli_val is None:
-            setattr(args, key, default_val)
+    tasks = []
+    for idx, item in enumerate(raw_configs):
+        if not isinstance(item, dict):
+            parser.error(f"Config item at index {idx} must be a JSON object.")
 
-    args.streaming = str2bool(args.streaming) if not isinstance(args.streaming, bool) else args.streaming
-    args.block_size = int(args.block_size)
+        item_copy = dict(item)
+        if "dataset_name" in item_copy and "name" not in item_copy:
+            item_copy["name"] = item_copy.pop("dataset_name")
 
-    if not args.dataset_path or not args.save_path:
-        parser.error("--dataset_path and --save_path must be provided either via CLI or in --config JSON file.")
+        task_cfg = dict(defaults)
+        task_cfg.update(item_copy)
 
-    return args
+        for key in defaults:
+            cli_val = getattr(args, key, None)
+            if cli_val is not None:
+                task_cfg[key] = cli_val
+
+        task_cfg["streaming"] = (
+            str2bool(task_cfg["streaming"])
+            if not isinstance(task_cfg["streaming"], bool)
+            else task_cfg["streaming"]
+        )
+        task_cfg["block_size"] = int(task_cfg["block_size"])
+
+        if not task_cfg["dataset_path"] or not task_cfg["save_path"]:
+            parser.error(
+                f"Task #{idx + 1}: --dataset_path and --save_path must be provided either via CLI or in --config JSON file."
+            )
+
+        tasks.append(argparse.Namespace(**task_cfg))
+
+    return tasks
 
 
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
@@ -102,23 +128,30 @@ def chunk_stream_generator(dataset, block_size=1024):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    cache_dir = args.cache_dir if args.cache_dir else None
-    dataset_name = args.name if args.name else None
+    tasks = parse_args()
+    total_tasks = len(tasks)
 
-    stream_dataset = load_dataset(
-        args.dataset_path,
-        name=dataset_name,
-        split=args.split,
-        streaming=args.streaming,
-        cache_dir=cache_dir,
-    )
+    for idx, args in enumerate(tasks, start=1):
+        unknown_count = 0
+        token_total = 0
+        cache_dir = args.cache_dir if args.cache_dir else None
+        dataset_name = args.name if args.name else None
 
-    chunked_dataset = Dataset.from_generator(
-        chunk_stream_generator,
-        gen_kwargs={"dataset": stream_dataset, "block_size": args.block_size},
-        cache_dir=cache_dir,
-    )
-    chunked_dataset.save_to_disk(args.save_path)
-    print(f"Total token: {token_total}")
-    print(f"Total unknown token: {unknown_count}")
+        print(f"\n[{idx}/{total_tasks}] dataset={args.dataset_path} (name={dataset_name}, split={args.split}) -> {args.save_path}")
+
+        stream_dataset = load_dataset(
+            args.dataset_path,
+            name=dataset_name,
+            split=args.split,
+            streaming=args.streaming,
+            cache_dir=cache_dir,
+        )
+
+        chunked_dataset = Dataset.from_generator(
+            chunk_stream_generator,
+            gen_kwargs={"dataset": stream_dataset, "block_size": args.block_size},
+            cache_dir=cache_dir,
+        )
+        chunked_dataset.save_to_disk(args.save_path)
+        print(f"Total token: {token_total}")
+        print(f"Total unknown token: {unknown_count}")
