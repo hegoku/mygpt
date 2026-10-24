@@ -68,7 +68,11 @@ class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
                     labels.flatten(),
                     ignore_index=self.config.pad_token_id,
                 )
-        return CausalLMOutputWithPast(loss=loss, logits=embedding, past_key_values=None)
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=None if labels is not None else embedding,
+            past_key_values=None,
+        )
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         return {
