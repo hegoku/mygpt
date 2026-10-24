@@ -25,6 +25,9 @@ def parse_args():
     parser.add_argument("--cache_dir", type=str, default=None, help="Cache directory for HuggingFace datasets (default: None)")
     parser.add_argument("--streaming", type=str2bool, nargs="?", const=True, default=None, help="Whether to stream the dataset (default: True)")
     parser.add_argument("--split", type=str, default=None, help="Dataset split to load (default: train)")
+    parser.add_argument("--text_column", type=str, default=None, help="Column name containing text data (default: text)")
+    parser.add_argument("--max_tokens", type=int, default=None, help="Maximum number of training tokens to generate before stopping (default: None)")
+    parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of raw dataset records (samples) to read (default: None)")
 
     args = parser.parse_args()
 
@@ -36,6 +39,9 @@ def parse_args():
         "cache_dir": None,
         "streaming": True,
         "split": "train",
+        "text_column": "text",
+        "max_tokens": None,
+        "max_samples": None,
     }
 
     raw_configs = [{}]
@@ -74,6 +80,10 @@ def parse_args():
             else task_cfg["streaming"]
         )
         task_cfg["block_size"] = int(task_cfg["block_size"])
+        if task_cfg["max_tokens"] is not None:
+            task_cfg["max_tokens"] = int(task_cfg["max_tokens"])
+        if task_cfg["max_samples"] is not None:
+            task_cfg["max_samples"] = int(task_cfg["max_samples"])
 
         if not task_cfg["dataset_path"] or not task_cfg["save_path"]:
             parser.error(
@@ -89,11 +99,11 @@ tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 
 # --- 2. 创建一个流，负责 Tokenization 和 UNK 过滤 ---
 unknown_count = 0
-def tokenized_stream_generator(dataset):
+def tokenized_stream_generator(dataset, text_column="text"):
     global unknown_count
-    print("Starting stream: Tokenizing and filtering UNK tokens...")
+    print(f"Starting stream: Tokenizing column '{text_column}' and filtering UNK tokens...")
     for record in dataset:
-        text = record['text']
+        text = record[text_column]
         if not text:
             continue
 
@@ -113,11 +123,11 @@ def tokenized_stream_generator(dataset):
 
 # --- 3. 创建一个流，负责拼接和分块 ---
 token_total = 0
-def chunk_stream_generator(dataset, block_size=1024):
+def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tokens=None):
     global token_total
     buffer = []
     print("\nStarting stream: Packing tokenized records into chunks...")
-    for token_list in tokenized_stream_generator(dataset):
+    for token_list in tokenized_stream_generator(dataset, text_column=text_column):
         buffer.extend(token_list)
         
         while len(buffer) >= (block_size + 1):
@@ -125,6 +135,9 @@ def chunk_stream_generator(dataset, block_size=1024):
             buffer = buffer[block_size:]
             token_total += chunk.shape[0] - 1
             yield {"input": chunk}
+            if max_tokens is not None and token_total >= max_tokens:
+                print(f"\nReached max_tokens limit ({token_total} >= {max_tokens}). Stopping stream.")
+                return
 
 
 if __name__ == "__main__":
@@ -138,6 +151,10 @@ if __name__ == "__main__":
         dataset_name = args.name if args.name else None
 
         print(f"\n[{idx}/{total_tasks}] dataset={args.dataset_path} (name={dataset_name}, split={args.split}) -> {args.save_path}")
+        if args.max_tokens is not None:
+            est_chunks = (args.max_tokens + args.block_size - 1) // args.block_size
+            est_bytes = est_chunks * (args.block_size + 1) * 8
+            print(f"Estimated output for max_tokens={args.max_tokens:,}: ~{est_chunks:,} chunks, ~{est_bytes / (1024**2):.2f} MB ({est_bytes / (1024**3):.2f} GB)")
 
         stream_dataset = load_dataset(
             args.dataset_path,
@@ -147,9 +164,20 @@ if __name__ == "__main__":
             cache_dir=cache_dir,
         )
 
+        if args.max_samples is not None:
+            if args.streaming:
+                stream_dataset = stream_dataset.take(args.max_samples)
+            else:
+                stream_dataset = stream_dataset.select(range(min(args.max_samples, len(stream_dataset))))
+
         chunked_dataset = Dataset.from_generator(
             chunk_stream_generator,
-            gen_kwargs={"dataset": stream_dataset, "block_size": args.block_size},
+            gen_kwargs={
+                "dataset": stream_dataset,
+                "block_size": args.block_size,
+                "text_column": args.text_column,
+                "max_tokens": args.max_tokens,
+            },
             cache_dir=cache_dir,
         )
         chunked_dataset.save_to_disk(args.save_path)

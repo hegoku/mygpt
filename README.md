@@ -14,6 +14,9 @@
 | `--cache_dir` | `str` | No | `None` | Directory for Hugging Face dataset caching. |
 | `--streaming` | `bool` | No | `True` | Whether to load the source dataset in streaming mode (`True` / `False`). |
 | `--split` | `str` | No | `train` | Dataset split to process (e.g., `train`, `validation`). |
+| `--text_column` | `str` | No | `text` | Name of the column containing text data (e.g., `text`, `content`). |
+| `--max_tokens` | `int` | No | `None` | Stop after packing at least this many training tokens (approx. `8 bytes / token` on disk). |
+| `--max_samples` | `int` | No | `None` | Maximum number of raw source records (documents) to read from the dataset. |
 
 *\*`--dataset_path` and `--save_path` must be provided either via CLI or inside the `--config` JSON file.*
 
