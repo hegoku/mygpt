@@ -1,4 +1,5 @@
 from transformers import PreTrainedModel, PretrainedConfig, GenerationMixin
+import Attention
 import MyLlama
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,12 +34,9 @@ class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
         self.post_init()
 
     def _init_weights(self, module):
-        """ Initialize the weights.
-        """
-        if isinstance(module, (nn.Linear, nn.Embedding)):
-            module.weight.data.normal_(mean=0.0, std=0.02)
-            if isinstance(module, (nn.Linear)) and module.bias is not None:
-                module.bias.data.zero_()
+        super()._init_weights(module)
+        if isinstance(module, (Attention.LlamaMultiHeadAttention, Attention.MultiHeadAttention)):
+            module.init_buffers()
 
     def get_input_embeddings(self):
         return self.token_embedding

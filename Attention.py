@@ -92,14 +92,18 @@ class MultiHeadAttention(nn.Module):
         self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=bias)
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=bias)
 
-        mask = torch.triu(torch.ones(self.max_context, self.max_context, dtype=torch.bool), diagonal=1)
-        cos, sin = precompute_rope_params(self.d_q, context_length=max_context)
-        self.register_buffer("mask", mask, persistent=False)
-        self.register_buffer("cos", cos, persistent=False)
-        self.register_buffer("sin", sin, persistent=False)
+        self.init_buffers()
 
         self.linear_bias = bias
         self.dropout = nn.Dropout(dropout)
+
+    def init_buffers(self):
+        device = self.w_Q.weight.device
+        mask = torch.triu(torch.ones(self.max_context, self.max_context, dtype=torch.bool, device=device), diagonal=1)
+        cos, sin = precompute_rope_params(self.d_q, context_length=self.max_context)
+        self.register_buffer("mask", mask, persistent=False)
+        self.register_buffer("cos", cos.to(device), persistent=False)
+        self.register_buffer("sin", sin.to(device), persistent=False)
 
     def forward(self, embedding_word, padding_mask=None):
         token_num = embedding_word.shape[-2]
@@ -152,6 +156,7 @@ class LlamaMultiHeadAttention(nn.Module):
         self.head_num = head_num
         self.d_q = self.embedding_size // head_num
         self.d_v = self.d_q
+        self.rope_theta = rope_theta
         self.softmax_factor = self.d_q**0.5
 
         self.w_Q = nn.Linear(embedding_dim, embedding_dim, bias=False)
@@ -159,11 +164,15 @@ class LlamaMultiHeadAttention(nn.Module):
         self.w_V = nn.Linear(embedding_dim, embedding_dim, bias=False)
         self.output = nn.Linear(embedding_dim, embedding_dim, bias=False)
 
-        mask = torch.triu(torch.ones(self.max_context, self.max_context, dtype=torch.bool), diagonal=1)
-        cos, sin = precompute_rope_params(self.d_q, context_length=max_context, theta_base=rope_theta)
+        self.init_buffers()
+
+    def init_buffers(self):
+        device = self.w_Q.weight.device
+        mask = torch.triu(torch.ones(self.max_context, self.max_context, dtype=torch.bool, device=device), diagonal=1)
+        cos, sin = precompute_rope_params(self.d_q, context_length=self.max_context, theta_base=self.rope_theta)
         self.register_buffer("mask", mask, persistent=False)
-        self.register_buffer("cos", cos, persistent=False)
-        self.register_buffer("sin", sin, persistent=False)
+        self.register_buffer("cos", cos.to(device), persistent=False)
+        self.register_buffer("sin", sin.to(device), persistent=False)
 
     def forward(self, embedding_word, padding_mask=None):
         token_num = embedding_word.shape[-2]
