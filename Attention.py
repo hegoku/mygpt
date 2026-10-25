@@ -168,14 +168,14 @@ class LlamaMultiHeadAttention(nn.Module):
 
     def init_buffers(self):
         device = self.w_Q.weight.device
-        mask = torch.triu(torch.ones(self.max_context, self.max_context, dtype=torch.bool, device=device), diagonal=1)
+        # mask = torch.triu(torch.ones(self.max_context, self.max_context, dtype=torch.bool, device=device), diagonal=1)
         cos, sin = precompute_rope_params(self.d_q, context_length=self.max_context, theta_base=self.rope_theta)
-        self.register_buffer("mask", mask, persistent=False)
+        # self.register_buffer("mask", mask, persistent=False)
         self.register_buffer("cos", cos.to(device), persistent=False)
         self.register_buffer("sin", sin.to(device), persistent=False)
 
     def forward(self, embedding_word, padding_mask=None):
-        token_num = embedding_word.shape[-2]
+        # token_num = embedding_word.shape[-2]
         q = self.w_Q(embedding_word)
         k = self.w_K(embedding_word)
         v = self.w_V(embedding_word)
@@ -199,20 +199,21 @@ class LlamaMultiHeadAttention(nn.Module):
         q = compute_rope(q, self.cos, self.sin)
         k = compute_rope(k, self.cos, self.sin)
 
-        mask = self.mask[:token_num, :token_num]
-        if padding_mask is not None:
-            mask = mask | padding_mask
+        # 不自己算 dot product, 用 scaled_dot_product_attention
+        # mask = self.mask[:token_num, :token_num]
+        # if padding_mask is not None:
+        #     mask = mask | padding_mask
 
-        scores = q @ k.transpose(-2, -1)
-        scores.masked_fill_(mask, -torch.inf)
-        weights = torch.softmax(scores / self.softmax_factor, dim=-1)
+        # scores = q @ k.transpose(-2, -1)
+        # scores.masked_fill_(mask, -torch.inf)
+        # weights = torch.softmax(scores / self.softmax_factor, dim=-1)
 
-        # Shape: (b, num_tokens, num_heads, head_dim)
-        output = (weights @ v).transpose(-3, -2)
+        # # Shape: (b, num_tokens, num_heads, head_dim)
+        # output = (weights @ v).transpose(-3, -2)
 
-        # output = nn.functional.scaled_dot_product_attention(
-            # q, k, v, attn_mask=None, dropout_p=0, is_causal=True)
-        # output = output.transpose(-3, -2)
+        output = nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=None, dropout_p=0, is_causal=True)
+        output = output.transpose(-3, -2)
 
         # Combine heads, where self.embedding_size = self.head_num * self.d_q
         output = output.reshape(*output.shape[:-2], self.embedding_size)

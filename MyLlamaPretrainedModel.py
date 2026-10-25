@@ -68,6 +68,9 @@ class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
                     labels.flatten(),
                     ignore_index=self.config.pad_token_id,
                 )
+        # 训练/计算Loss时(labels不为None)不返回庞大的logits张量(B, L, V)，
+        # 使PyTorch在算完cross_entropy梯度后能立即释放该显存，大幅降低反向传播的峰值显存占用；
+        # 仅在推理生成时(labels为None)返回logits。
         return CausalLMOutputWithPast(
             loss=loss,
             logits=None if labels is not None else embedding,
