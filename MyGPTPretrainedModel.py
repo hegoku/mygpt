@@ -22,7 +22,7 @@ class MyGPTPretrainedModelConfig(PretrainedConfig):
 class MyGPTPretrainedModel(PreTrainedModel, GenerationMixin):
     config_class = MyGPTPretrainedModelConfig  # 关联配置
 
-    def __init__(self, config):
+    def __init__(self, config: MyGPTPretrainedModelConfig):
         super().__init__(config)
         self.embedding_dim = config.embedding_dim
         self.max_context = config.max_context

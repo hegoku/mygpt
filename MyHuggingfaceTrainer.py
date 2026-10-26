@@ -3,7 +3,7 @@ from transformers import Trainer, TrainingArguments, trainer_pt_utils
 import torch
 import MyLlama
 
-ALL_LAYERNORM_LAYERS = [torch.nn.LayerNorm, MyLlama.RMSNorm, torch.nn.RMSNorm]
+ALL_LAYERNORM_LAYERS = [torch.nn.LayerNorm, torch.nn.RMSNorm]
 
 class MyHuggingfaceTrainer(Trainer):
     def get_decay_parameter_names(self, model) -> list[str]:

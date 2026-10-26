@@ -1,3 +1,10 @@
+import os
+os.environ["OTEL_SDK_DISABLED"] = "true"
+os.environ["OTEL_METRICS_EXPORTER"] = "none"
+os.environ["OTEL_TRACES_EXPORTER"] = "none"
+os.environ["LIGER_DISABLE_TELEMETRY"] = "1"
+os.environ["WANDB_PROJECT"] = 'mygpt'
+
 from transformers import PreTrainedModel, PretrainedConfig
 import Attention
 import MyGPT
@@ -7,14 +14,21 @@ from transformers import Trainer
 import DeepseekTokenizer
 import torch
 from transformers import TrainerCallback
-import os
 from datasets import load_from_disk
 import MyGPTPretrainedModel
 import MyLlamaPretrainedModel
 from torch.utils.data import Dataset, DataLoader
 import MyHuggingfaceTrainer
 
-os.environ["WANDB_PROJECT"] = 'mygpt'
+USE_CUDA = torch.cuda.is_available()
+if USE_CUDA:
+   device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+   device = torch.device("mps")
+else:
+   device = torch.device("cpu")
+
+print(f"Using {device} device.")
 
 training_args = TrainingArguments(
     output_dir="./results1",
@@ -34,7 +48,6 @@ training_args = TrainingArguments(
     weight_decay=0.1,
     adam_beta2=0.95,
     # seed=123,
-    # warmup_ratio=0.03,
     warmup_steps=0.03,
     lr_scheduler_type="cosine",
     # lr_scheduler_type="warmup_stable_decay",
@@ -49,28 +62,21 @@ training_args = TrainingArguments(
     dataloader_pin_memory=False,
     torch_compile=True,
     # label_names=['target'],
-    remove_unused_columns=False
+    remove_unused_columns=False,
     # resume_from_checkpoint=True
+    bf16=True,
+    tf32=USE_CUDA
 )
-
-if torch.cuda.is_available():
-   device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-   device = torch.device("mps")
-else:
-   device = torch.device("cpu")
-
-print(f"Using {device} device.")
 
 # 初始化模型
 tokenizer = DeepseekTokenizer.DeepseekTokenizer()
 # config = MyGPTPretrainedModel.MyGPTPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id)
 # model = MyGPTPretrainedModel.MyGPTPretrainedModel(config).to(device, dtype=torch.bfloat16)
 config = MyLlamaPretrainedModel.MyLlamaPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id, layers=24, embedding_dim=512, head_num=8, max_context=1024)
-model = MyLlamaPretrainedModel.MyLlamaPretrainedModel(config).to(device, dtype=torch.bfloat16)
+model = MyLlamaPretrainedModel.MyLlamaPretrainedModel(config).to(device)
 # model = MyLlamaPretrainedModel.MyLlamaPretrainedModel.from_pretrained("./results1/checkpoint-47000").to(device, dtype=torch.bfloat16)
 
-train_dataset = load_from_disk('/Users/jack/Downloads/TinyStories')
+train_dataset = load_from_disk('./TinyStories')
 # train_dataset = train_dataset.to_iterable_dataset()
 # train_dataset = train_dataset.shuffle(123, buffer_size=100)
 # train_dataset = train_dataset.batch(batch_size=16)

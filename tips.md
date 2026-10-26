@@ -34,14 +34,30 @@ remove_unused_columns=False
 
 按照下列顺序进行优化后的内存占用大小:
 
-1. [训练时不返回 `logits`](#训练时不返回-logits-以降低大词表下的峰值显存):
+1. [训练时不返回 `logits`](#一训练时不返回-logits-以降低大词表下的峰值显存):
   - 显存: `10.1GB`
   - 速度: `6.82s/it`
   - 训练时间: `4小时9分`
-2. [使用 `scaled_dot_product_attention`](#使用-scaled_dot_product_attention-优化显存与训练速度):
+2. [使用 `scaled_dot_product_attention`](#二使用-scaled_dot_product_attention-优化显存与训练速度):
   - 显存: `7.6GB`
   - 速度: `4.72s/it`
   - 训练时间: `2小时59分`
+3. [使用 `LigerFusedLinearCrossEntropyLoss`](#三使用-ligerfusedlinearcrossentropyloss-消除大词表输出层显存峰值):
+  - 显存: `5.8GB`
+  - 速度: `7.25s/it`
+  - 训练时间: `3小时35分`
+4. bf16=True, tf32=True, 不`to(device, dtype=bf16)`:
+  - 只开启 1和2，没开3的情况下
+  - 显存: `9.2GB`
+  - 速度: `6.19s/it`
+  - 训练时间: `3小时51分`
+  - loss比在只开启`1`和`2`的情况下小 `0.18`
+5. bf16=True, tf32=True, 不`to(device, dtype=bf16)`:
+  - 开3的情况下
+  - 显存: `7.1GB`
+  - 速度: `9.65s/it`
+  - 训练时间: `6小时13分`
+  - loss比在开启`1`,`2`,`3`的情况下小 `0.19`
 
 ---
 
@@ -162,4 +178,154 @@ self.accelerator.backward(loss) # 3. 执行整网反向传播（从第 24 层一
 * **数值精度反而更高**：手写版在 `bfloat16` 下每一步中间结果写回显存都会经历一次 `bfloat16` 截断（共 3 次舍入误差）；而 SDPA 在 GPU 寄存器内部全程使用 **`float32` 累加器**完成全部计算，仅在最终输出时转回 `bfloat16`（仅 1 次舍入误差），因此数值稳定性和训练效果更好。
 
 ---
+
+# 三、使用 `LigerFusedLinearCrossEntropyLoss` 消除大词表输出层显存峰值
+
+## 解决的问题
+
+即使在第一项优化中将返回值改成了 `logits=None`（让反向传播算完输出层后能立即释放 `logits`），在**前向传播计算 `F.linear` 到反向传播第一步计算 `CrossEntropyBackward` 之间**，完整的 `(batch_size, seq_len, vocab_size)` 张量依然必须在显存中短暂实例化：
+1. **输出层瞬时峰值显存极高（尤其在开启 `bf16=True` 混合精度时）**：当 `vocab_size = 65005` 时，`F.linear` 产出的 `logits` 有 4.66 亿个元素。在 `bf16=True`（AMP）下，PyTorch 为了数值稳定会自动把 `logits` 升级（Upcast）为 `float32` 再计算 `cross_entropy`，瞬间产生 `bfloat16 logits (0.91GB) + float32 logits (1.86GB) + float32 梯度 (1.86GB)`，峰值显存高达 **3GB ~ 4GB**，直接导致 12GB 显存溢出。
+2. **与 `torch.compile` 结合时的 Graph Break 问题**：`LigerFusedLinearCrossEntropyLoss` 内部使用 Triton 自定义算子并调用了 `Tensor.item()`，如果直接在 `forward` 中调用会触发 `torch._dynamo` 的 `Graph break from Tensor.item()` 警告。
+
+使用 `LigerFusedLinearCrossEntropyLoss` 并配合 `@torch._dynamo.disable`，可以**彻底避免在显存中生成完整的 `logits` 张量**，将输出层的显存占用从数 GB 降低到几十 MB，同时完美兼容 `torch_compile=True`。
+
+## 代码改动 (`MyLlamaPretrainedModel.py`)
+
+为了同时兼容支持 `liger-kernel` 的 CUDA 机器和不支持它的环境（如 macOS MPS / CPU 或未安装 `liger-kernel` 的机器），并支持在显存充足时手动关闭，采用以下跨平台兼容写法：
+
+1. 使用 `try...except ImportError` 安全导入 `LigerFusedLinearCrossEntropyLoss`，并在 `MyLlamaPretrainedModelConfig` 中增加 `use_liger_loss: bool = True` 开关：
+
+```python
+try:
+    from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
+    HAS_LIGER_KERNEL = True
+except ImportError:
+    LigerFusedLinearCrossEntropyLoss = None
+    HAS_LIGER_KERNEL = False
+
+class MyLlamaPretrainedModelConfig(PretrainedConfig):
+    model_type = "myllama2"
+    def __init__(self, vocab_size=50000, max_context=1024, embedding_dim=768, layers=12, head_num=12, ff_dim=2048, pad_token_id=-100, rope_theta:float=10000.0, use_liger_loss:bool=True, **kwargs):
+        super().__init__(**kwargs)
+        ...
+        self.use_liger_loss = use_liger_loss
+```
+
+2. 在 `__init__` 中按需初始化 Liger Loss 实例，并在 `forward` 中同时判断 **`self.loss_fn_sum is not None`、`embedding.is_cuda`（必须是 CUDA 设备，macOS 的 `mps` 会自动走 `else` 分支）以及 `config.use_liger_loss`**：
+
+```python
+class MyLlamaPretrainedModel(PreTrainedModel, GenerationMixin):
+    def __init__(self, config):
+        ...
+        self.norm = nn.RMSNorm(config.embedding_dim, eps=1e-6)
+        if HAS_LIGER_KERNEL and getattr(config, "use_liger_loss", True):
+            self.loss_fn_sum = LigerFusedLinearCrossEntropyLoss(
+                ignore_index=config.pad_token_id,
+                reduction="sum",
+            )
+            self.loss_fn_mean = LigerFusedLinearCrossEntropyLoss(
+                ignore_index=config.pad_token_id,
+                reduction="mean",
+            )
+        else:
+            self.loss_fn_sum = None
+            self.loss_fn_mean = None
+        self.post_init()
+
+    @torch._dynamo.disable
+    def _compute_liger_loss(self, hidden_states, labels, num_items_in_batch=None):
+        if num_items_in_batch is not None:
+            return self.loss_fn_sum(
+                self.token_embedding.weight,
+                hidden_states,
+                labels,
+            ) / num_items_in_batch
+        return self.loss_fn_mean(
+            self.token_embedding.weight,
+            hidden_states,
+            labels,
+        )
+
+    def forward(self, input_ids, past_key_values=None, use_cache=None, labels=None, **kwargs):
+        embedding = self.token_embedding(input_ids)
+        for layer in self.transformer_layers:
+            embedding = layer(embedding)
+        embedding = self.norm(embedding)
+
+        loss = None
+        logits = None
+        if labels is not None:
+            num_items_in_batch = kwargs.get("num_items_in_batch", None)
+            use_liger = (
+                self.loss_fn_sum is not None
+                and embedding.is_cuda
+                and getattr(self.config, "use_liger_loss", True)
+            )
+            if use_liger:
+                # ✅ CUDA + 已安装 liger_kernel：走 Triton 分块融合算子，不生成完整 logits
+                loss = self._compute_liger_loss(
+                    embedding.reshape(-1, self.embedding_dim),
+                    labels.reshape(-1),
+                    num_items_in_batch,
+                )
+            else:
+                # ✅ macOS (MPS) / CPU / 手动关闭 use_liger_loss：回退到原生 PyTorch 实现（同样不返回 logits）
+                logits_for_loss = F.linear(embedding, self.token_embedding.weight)
+                if num_items_in_batch is not None:
+                    loss = F.cross_entropy(
+                        logits_for_loss.flatten(0, 1),
+                        labels.flatten(),
+                        ignore_index=self.config.pad_token_id,
+                        reduction="sum",
+                    ) / num_items_in_batch
+                else:
+                    loss = F.cross_entropy(
+                        logits_for_loss.flatten(0, 1),
+                        labels.flatten(),
+                        ignore_index=self.config.pad_token_id,
+                        reduction="mean",
+                    )
+        else:
+            # ✅ 仅在推理生成（labels 为 None）时才计算并返回完整的 logits
+            logits = F.linear(embedding, self.token_embedding.weight)
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=None,
+        )
+```
+
+## 原理解析
+
+### 1. 为什么传统 `F.linear + F.cross_entropy` 是显存瓶颈？
+在 Transformer 最后一层，`norm` 之后的隐状态 `embedding` 形状仅为 `(7, 1024, 512)`（在 `bfloat16` 下仅占 **7 MB** 显存）。
+但一旦执行 `F.linear(embedding, self.token_embedding.weight)` 投影到 `65005` 的词表维度，张量形状立刻变成 `(7, 1024, 65005)`（体积暴涨 **127 倍**）。为了求导，PyTorch 必须保留完整的 `logits` 张量直到 `CrossEntropyBackward` 算完。
+
+### 2. `LigerFusedLinearCrossEntropyLoss` 的分块融合机制（Chunked Fused Kernel）
+Liger-Kernel 将 **线性投影（`Linear`）+ `Softmax` + 交叉熵损失（`CrossEntropy`）+ 反向梯度计算** 融合成了一个基于 OpenAI Triton 的算子：
+1. **对 Token 维度分块（Chunking）**：算子不会一次性计算全部 $B \times L = 7168$ 个 token 的 `logits`，而是将其切成很小的块（Chunk），每次只拿一小块隐状态与 `token_embedding.weight` 相乘。
+2. **前向与梯度在片上原地完成（In-place Gradient Computation）**：由于交叉熵对 `logits` 的导数公式极其简洁（$\frac{\partial \mathcal{L}}{\partial z_i} = \text{softmax}(z)_i - \mathbb{I}(i = y)$），Liger 算子在算出每一小块 `logits` 和 `loss` 的**同一时刻**，直接在 GPU 高速缓存中算出该块的梯度，并累加回传给 `hidden_states` 和 `token_embedding.weight`，随后**立即丢弃这一小块 `logits`**。
+3. **0 精度损失**：整个分块计算与在线 Softmax 递推在数学上与原生 PyTorch **100% 严格等价**，但全程没有任何完整的 `(B, L, V)` 张量驻留在显存中。
+
+### 3. 为什么要加 `@torch._dynamo.disable`？
+* 当 `TrainingArguments` 开启 `torch_compile=True` 时，PyTorch Dynamo 会尝试把整个 `forward` 追踪编译成一张静态计算图。
+* 而 `LigerFusedLinearCrossEntropyLoss` 本身已经是手写调优好的底层 Triton `autograd.Function`，其内部调用了 `Tensor.item()` 来读取有效 token 数，这会打断 Dynamo 的图捕获并抛出 `Graph break` 警告。
+* 给 `_compute_liger_loss` 加上 `@torch._dynamo.disable` 后，前面的 `Embedding + 24 层 Transformer + RMSNorm` 会被 `torch.compile` 完整编译为一个无中断的高效计算图，而最后一步的 Loss 计算则直接无缝移交给 Liger 的 Triton 内核原生执行。
+
+### 4. 实测结论：为什么在小 Batch（显存未满）下开启 `LigerFusedLinearCrossEntropyLoss` 训练速度反而会变慢？
+在已启用优化 1（不返回 `logits`）和优化 2（SDPA）后，当 `per_device_train_batch_size=7` 时显存占用仅为 `7.6GB`（远低于 12GB 上限）。此时若直接开启 `LigerFusedLinearCrossEntropyLoss`，虽然显存进一步下降，但**单步训练速度反而变慢**，原因在于典型的**“空间换时间”**开销：
+
+1. **分块重计算（Recomputation）不及单次 `cuBLAS` 大矩阵乘快**：
+   * 原生 `F.linear` 调用的是 NVIDIA 闭源极致调优的 `cuBLAS` 算子，一次性完成 `7168 × 512 @ 512 × 65005` 的大矩阵乘法，GPU 满载率极高。
+   * 而 Liger 为了不保存 `logits`，必须在 `forward` 阶段将输入切成多个小块（Chunks），在循环中执行多次小矩阵乘法，并立即在前向阶段额外计算 $dX$ 和 $dW$ 梯度及片上原子累加。在显存本就充裕时，多次分块小矩阵乘 + 重计算比单次 `cuBLAS` 慢。
+2. **内部 `Tensor.item()` 触发了 CPU-GPU 强制同步阻塞（CUDA Synchronization）**：
+   * `LigerFusedLinearCrossEntropyLoss` 内部为了统计非 padding 的有效 token 数，执行了 `(target != ignore_index).sum().item()`。
+   * `.item()` 会强制把标量从 GPU 显存拷贝回 CPU 内存，触发 `cudaStreamSynchronize`，迫使 CPU 原地死等 GPU 把前面 24 层 Transformer 全部算完，打断了 CPU 异步下发 Kernel 的流水线。在 `gradient_accumulation_steps=32` 下，每个优化步要被迫停顿同步 32 次。
+3. **打断了 `torch.compile` 的尾部算子融合**：
+   * 原生 `F.linear + F.cross_entropy` 可以和前面的 `RMSNorm` 一起留在 `torch.compile` (`inductor`) 的同一张静态计算图里一气呵成；而切换到外部 Liger 算子会在每个 micro-batch 尾部产生一次退出编译图再回到 Python 调度的开销。
+4. **何时应该开启它？（适用场景总结）**：
+   * **显存够用时（如纯 `bf16` 权重 + `batch_size=7/8`，显存仅 7.6GB）**：在初始化 `MyLlamaPretrainedModelConfig(..., use_liger_loss=False)` 关闭它，直接用原生 `F.linear + F.cross_entropy` 速度最快。
+   * **显存不够用时（如开启 `TrainingArguments(bf16=True)` 混合精度，或想把 `per_device_train_batch_size` 从 `7` 翻倍拉大到 `16` 时）**：原生实现会因 `logits` 占满 12GB 显存而溢出到系统内存导致速度暴跌，此时开启 `use_liger_loss=True` 省下 2~3GB 显存即可让大 Batch 在显存内满速运行。
+
 
