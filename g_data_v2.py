@@ -8,6 +8,7 @@ import DeepseekTokenizer
 import torch
 
 
+# 支持的整数类型映射: 输入标识 -> (标准名称, PyTorch dtype, 每个元素占用的字节数)
 DTYPE_MAP = {
     "int32": ("int32", torch.int32, 4),
     "32": ("int32", torch.int32, 4),
@@ -17,6 +18,7 @@ DTYPE_MAP = {
 
 
 def parse_dtype(v):
+    """解析并校验整数类型参数 (支持 'int32'/'32' 和 'int64'/'64')。"""
     key = str(v).strip().lower()
     if key not in DTYPE_MAP:
         raise argparse.ArgumentTypeError(f"Unsupported dtype '{v}'. Choose from: int32, int64 (or 32, 64).")
@@ -24,6 +26,7 @@ def parse_dtype(v):
 
 
 def parse_size_to_bytes(v):
+    """将带单位的文件大小字符串 (如 '500MB', '2GB', '1.5G') 解析为字节数 (Bytes)。"""
     if v is None:
         return None
     if isinstance(v, (int, float)):
@@ -49,6 +52,7 @@ def parse_size_to_bytes(v):
 
 
 def str2bool(v):
+    """将命令行或 JSON 中的布尔参数统一转换为 Python bool。"""
     if isinstance(v, bool):
         return v
     if v.lower() in ("yes", "true", "t", "y", "1"):
@@ -97,10 +101,14 @@ def parse_args():
         "test_tokens": None,
     }
 
+    # 如果指定了 --config JSON 文件，读取配置并记录 JSON 文件所在的目录
     raw_configs = [{}]
+    config_dir = None
     if args.config:
+        config_dir = os.path.dirname(os.path.abspath(args.config))
         with open(args.config, "r", encoding="utf-8") as f:
             config_data = json.load(f)
+        # 支持单个 JSON 对象 {...} 或多个任务的 JSON 数组 [{...}, {...}]
         if isinstance(config_data, list):
             if not config_data:
                 parser.error("The JSON config array cannot be empty.")
@@ -116,9 +124,32 @@ def parse_args():
             parser.error(f"Config item at index {idx} must be a JSON object.")
 
         item_copy = dict(item)
+        # 兼容 JSON 中使用 dataset_name 作为 name 的别名
         if "dataset_name" in item_copy and "name" not in item_copy:
             item_copy["name"] = item_copy.pop("dataset_name")
 
+        # 将 JSON 中配置的相对路径以 JSON 文件所在目录 (config_dir) 为基准进行解析
+        if config_dir is not None:
+            for path_key in ("save_path", "test_save_path", "cache_dir"):
+                val = item_copy.get(path_key)
+                if isinstance(val, str) and val.strip():
+                    expanded = os.path.expanduser(val.strip())
+                    if not os.path.isabs(expanded):
+                        item_copy[path_key] = os.path.normpath(os.path.join(config_dir, expanded))
+                    else:
+                        item_copy[path_key] = expanded
+
+            # dataset_path 既可能是 HuggingFace repo ID (如 "openbmb/Ultra-FineWeb-L3")，也可能是本地路径
+            # 仅当以 "." 开头或在 config_dir 下实际存在对应本地路径时，才按相对路径拼接
+            ds_val = item_copy.get("dataset_path")
+            if isinstance(ds_val, str) and ds_val.strip():
+                expanded_ds = os.path.expanduser(ds_val.strip())
+                if os.path.isabs(expanded_ds):
+                    item_copy["dataset_path"] = expanded_ds
+                elif expanded_ds.startswith(".") or os.path.exists(os.path.join(config_dir, expanded_ds)):
+                    item_copy["dataset_path"] = os.path.normpath(os.path.join(config_dir, expanded_ds))
+
+        # 合并优先级: 命令行参数 (CLI) > JSON 配置文件 > 默认值 (defaults)
         task_cfg = dict(defaults)
         task_cfg.update(item_copy)
 
@@ -137,6 +168,7 @@ def parse_args():
         bytes_per_elem = DTYPE_MAP[task_cfg["dtype"]][2]
         bytes_per_chunk = (task_cfg["block_size"] + 1) * bytes_per_elem
 
+        # 如果指定了 max_size (如 "2GB")，根据 dtype 和 block_size 换算为对应的 max_tokens
         if task_cfg["max_tokens"] is not None:
             task_cfg["max_tokens"] = int(task_cfg["max_tokens"])
         if task_cfg["max_size"] is not None:
@@ -146,6 +178,7 @@ def parse_args():
             if task_cfg["max_tokens"] is None or tokens_from_size < task_cfg["max_tokens"]:
                 task_cfg["max_tokens"] = tokens_from_size
 
+        # 如果指定了 test_size (如 "40MB")，同样换算为对应的 test_tokens
         if task_cfg["test_tokens"] is not None:
             task_cfg["test_tokens"] = int(task_cfg["test_tokens"])
         if task_cfg["test_size"] is not None:
@@ -223,6 +256,8 @@ def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tok
                 if phase == "train":
                     token_total += chunk.shape[0] - 1
                     yield {"input": chunk}
+                    # 当训练集达到目标 max_tokens 时:
+                    # 若配置了 test_tokens，则清空当前文档残留 buffer 并切换到 test 阶段，确保 train/test 零重叠
                     if max_tokens is not None and token_total >= max_tokens:
                         if test_tokens is not None and test_tokens > 0:
                             print(f"\nReached train max_tokens ({token_total:,} >= {max_tokens:,}). Clearing buffer and switching to test split...")
@@ -233,12 +268,14 @@ def chunk_stream_generator(dataset, block_size=1024, text_column="text", max_tok
                             print(f"\nReached max_tokens limit ({token_total:,} >= {max_tokens:,}). Stopping stream.")
                             return
                 else:
+                    # test 阶段继续从后续新文档流式打包，达到 test_tokens 后立即停止
                     test_token_total += chunk.shape[0] - 1
                     yield {"input": chunk}
                     if test_token_total >= test_tokens:
                         print(f"\nReached test_tokens limit ({test_token_total:,} >= {test_tokens:,}). Stopping stream.")
                         return
     finally:
+        # 显式关闭内层流式生成器，避免提前退出时 PyArrow 后台异步预读线程死锁
         token_stream.close()
 
 
@@ -291,6 +328,7 @@ if __name__ == "__main__":
             cache_dir=cache_dir,
         )
 
+        # 如果配置了 test_save_path，将单次流式生成的 chunk 按分界点切分为 train 和 test 并分别落盘
         if args.test_save_path:
             n_train_chunks = min((args.max_tokens + args.block_size - 1) // args.block_size, len(chunked_dataset))
             train_dataset = chunked_dataset.select(range(0, n_train_chunks))
@@ -304,6 +342,7 @@ if __name__ == "__main__":
             print(f"Total token: {token_total}")
         print(f"Total unknown token: {unknown_count}")
 
+    # 刷新标准输出并直接退出进程，避免 libarrow C++ 静态析构器在进程退出时卡住
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)

@@ -1,12 +1,23 @@
 import argparse
 import json
 import math
+import os
 import DeepseekTokenizer
 import MyLlamaPretrainedModel
 import torch
 from torch.utils.data import DataLoader
 from datasets import load_from_disk
 from tqdm import tqdm
+
+
+def resolve_config_path(val, config_dir):
+    if not val or not config_dir:
+        return val
+    expanded = os.path.expanduser(val)
+    if os.path.isabs(expanded):
+        return expanded
+    return os.path.normpath(os.path.join(config_dir, expanded))
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate model loss on a validation dataset.")
@@ -23,9 +34,12 @@ def parse_args():
         "batch_size": 8,
     }
 
+    config_dir = None
     raw_configs = [{}]
     if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
+        config_path = os.path.abspath(os.path.expanduser(args.config))
+        config_dir = os.path.dirname(config_path)
+        with open(config_path, "r", encoding="utf-8") as f:
             config_data = json.load(f)
         if isinstance(config_data, list):
             if not config_data:
@@ -36,13 +50,17 @@ def parse_args():
         else:
             parser.error("--config JSON must be an object or an array of objects.")
 
+    path_keys = ("dataset_path", "checkpoint")
     tasks = []
     for idx, item in enumerate(raw_configs):
         if not isinstance(item, dict):
             parser.error(f"Config item at index {idx} must be a JSON object.")
 
         task_cfg = dict(defaults)
-        task_cfg.update(item)
+        for k, v in item.items():
+            if k in path_keys and isinstance(v, str):
+                v = resolve_config_path(v, config_dir)
+            task_cfg[k] = v
 
         for key in defaults:
             cli_val = getattr(args, key, None)

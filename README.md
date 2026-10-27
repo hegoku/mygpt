@@ -23,7 +23,7 @@
 | `--test_size` | `str` | No | `None` | Target output disk size for the test split (e.g., `"20MB"`, `"100MB"`). Automatically converts to `test_tokens`. |
 | `--test_tokens` | `int` | No | `None` | Target number of tokens to pack for the test split after `max_tokens` is reached. |
 
-*\*`--dataset_path` and `--save_path` must be provided either via CLI or inside the `--config` JSON file.*
+*\*`--dataset_path` and `--save_path` must be provided either via CLI or inside the `--config` JSON file. Relative paths inside the JSON file are resolved relative to the JSON file's directory.*
 
 ## Usage Examples
 
@@ -112,7 +112,7 @@ python g_data_v2.py --config config.json --block_size 512 --split validation
 | `--checkpoint` | `str` | Yes* | `None` | Path to the model checkpoint directory (loaded via `from_pretrained`). |
 | `--batch_size` | `int` | No | `8` | Batch size used during evaluation. |
 
-*\*`--dataset_path` and `--checkpoint` must be provided either via CLI or inside the `--config` JSON file.*
+*\*`--dataset_path` and `--checkpoint` must be provided either via CLI or inside the `--config` JSON file. Relative paths inside the JSON file are resolved relative to the JSON file's directory.*
 
 ## Usage Examples
 
