@@ -170,7 +170,8 @@ trainer = MyHuggingfaceTrainer.MyHuggingfaceTrainer(
     train_dataset=train_dataset,
     # eval_dataset=tokenized_dataset["validation"],
     callbacks=[LossLoggingCallback(stable_end_step=stable_end_step)],
-    data_collator=data_collator
+    data_collator=data_collator,
+    is_packed_dataset=True,  # 数据集由 g_data_v2 无缝拼接打包，无 pad_token，直接用 batch_size * seq_len 计算有效 token 数
 )
 
 # trainer.train(resume_from_checkpoint="./results1/checkpoint-72500")  # 开始训练！
