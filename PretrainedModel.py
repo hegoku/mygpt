@@ -14,7 +14,7 @@ from transformers import Trainer
 import DeepseekTokenizer
 import torch
 from transformers import TrainerCallback
-from datasets import load_from_disk
+from datasets import load_from_disk, concatenate_datasets
 import MyGPTPretrainedModel
 import MyLlamaPretrainedModel
 from torch.utils.data import Dataset, DataLoader
@@ -50,11 +50,24 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
     return decoded_text
 
 class LossLoggingCallback(TrainerCallback):
-    def __init__(self, stable_end_step: int, model=None, tokenizer=None, device=None):
+    def __init__(self, stable_end_step: int, model=None, tokenizer=None, device=None, resume_optimizer_dir: str = None):
         self.stable_end_step = stable_end_step
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
+        self.resume_optimizer_dir = resume_optimizer_dir
+
+    def on_train_begin(self, args, state, control, optimizer=None, **kwargs):
+        if self.resume_optimizer_dir and optimizer is not None:
+            opt_file = os.path.join(self.resume_optimizer_dir, "optimizer.pt")
+            if os.path.isfile(opt_file):
+                print(f"\n[WSD] Loading optimizer state from {opt_file}...")
+                opt_state = torch.load(opt_file, map_location="cpu", weights_only=True)
+                optimizer.load_state_dict(opt_state)
+                print("[WSD] Optimizer state restored successfully!")
+            else:
+                print(f"\n[WSD] Warning: optimizer.pt not found in {self.resume_optimizer_dir}")
+        return control
 
     def on_step_end(self, args, state, control, **kwargs):
         # 无论 save_steps 是多少，只要到达 stable 结束的那一步，强制触发一次保存
@@ -98,16 +111,21 @@ if __name__ == "__main__":
         "per_device_batch_size": 16,
         "grad_accum_steps": 16,
         "num_epochs": 1,
-        "learning_rate": 0.0006
+        "learning_rate": 0.0006,
+        "resume_stable_checkpoint": None,  # 续训时填入如 "./results1/stable-checkpoint-XXXX"
+        "decay_ratio": 0.15,               # 设为 0.0 则整个数据集保持 Stable 训练；设为 0.15 则最后 15% 步数 Decay
     }
 
     # 初始化模型
     tokenizer = DeepseekTokenizer.DeepseekTokenizer()
     # config = MyGPTPretrainedModel.MyGPTPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id)
     # model = MyGPTPretrainedModel.MyGPTPretrainedModel(config).to(device, dtype=torch.bfloat16)
-    config = MyLlamaPretrainedModel.MyLlamaPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id, layers=24, embedding_dim=512, head_num=8, max_context=1024)
-    model = MyLlamaPretrainedModel.MyLlamaPretrainedModel(config)
-    # model = MyLlamaPretrainedModel.MyLlamaPretrainedModel.from_pretrained("./results1/checkpoint-47000").to(device, dtype=torch.bfloat16)
+    if args["resume_stable_checkpoint"]:
+        print(f"Loading model weights from {args['resume_stable_checkpoint']}...")
+        model = MyLlamaPretrainedModel.MyLlamaPretrainedModel.from_pretrained(args["resume_stable_checkpoint"])
+    else:
+        config = MyLlamaPretrainedModel.MyLlamaPretrainedModelConfig(vocab_size=tokenizer.len(), pad_token_id=tokenizer.pad_token_id, layers=24, embedding_dim=512, head_num=8, max_context=1024)
+        model = MyLlamaPretrainedModel.MyLlamaPretrainedModel(config)
 
     train_dataset = load_from_disk('./TinyStories')
     # train_dataset = train_dataset.to_iterable_dataset()
@@ -122,9 +140,12 @@ if __name__ == "__main__":
         math.ceil(len(train_dataset) / args["per_device_batch_size"]) / args["grad_accum_steps"]
     )
     total_steps = num_update_steps_per_epoch * args["num_epochs"]
-    # 自动分配 WSD 三阶段步数 (大数据集固定 400 步 warmup，小数据集最多占 5% + 82% stable + 15% decay)
-    warmup_steps = min(400, max(1, int(total_steps * 0.05)))
-    decay_steps = max(1, int(total_steps * 0.15))
+    # 自动分配 WSD 三阶段步数 (若从 stable-checkpoint 续训则 warmup=0，否则固定 400 步 warmup)
+    if args["resume_stable_checkpoint"]:
+        warmup_steps = 0
+    else:
+        warmup_steps = min(400, max(1, int(total_steps * 0.05)))
+    decay_steps = int(total_steps * args["decay_ratio"])
     stable_steps = max(0, total_steps - warmup_steps - decay_steps)
     stable_end_step = warmup_steps + stable_steps
     print(f"Total steps: {total_steps} | Warmup: {warmup_steps} | Stable: {stable_steps} (ends at step {stable_end_step}) | Decay: {decay_steps}")
@@ -175,7 +196,15 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         # eval_dataset=tokenized_dataset["validation"],
-        callbacks=[LossLoggingCallback(stable_end_step=stable_end_step, model=model, tokenizer=tokenizer, device=device)],
+        callbacks=[
+            LossLoggingCallback(
+                stable_end_step=stable_end_step,
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                resume_optimizer_dir=args["resume_stable_checkpoint"],
+            )
+        ],
         data_collator=data_collator,
         is_packed_dataset=True,  # 数据集由 g_data_v2 无缝拼接打包，无 pad_token，直接用 batch_size * seq_len 计算有效 token 数
     )
